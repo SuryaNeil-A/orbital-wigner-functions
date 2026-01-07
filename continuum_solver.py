@@ -95,20 +95,18 @@ def collapse(matrices: torch.Tensor) -> torch.Tensor:
 
     while matrices.shape[0] > 1:
         if matrices.shape[0] % 2 == 1:
-            # if the leading dimension is odd, just split off the last matrix
-            matrices_reduced = matrices[:-1]
-            # then multiply that last matrix to the last element
-            matrices_reduced[-1] = torch.matmul(
-                matrices_reduced[-1], matrices[-1]
+            # splits and multiplies last two matrices
+            last_prod = torch.matmul(matrices[-2], matrices[-1])
+            # and reforms matrices with the product replacing the last two
+            matrices = torch.cat(
+                (matrices[:-2], last_prod.unsqueeze(0)), dim=0
             )
-        else:
-            matrices_reduced = matrices
 
-        num_slices = matrices_reduced.shape[0]
-        matrices = matrices_reduced.view(
-            (2, num_slices // 2) + matrices.shape[1:]
-        )
-        matrices = torch.matmul(matrices[0], matrices[1])
+        num_slices = matrices.shape[0]
+        # split into pairs
+        matrices = matrices.view((num_slices // 2, 2) + matrices.shape[1:])
+        # and multiply
+        matrices = torch.matmul(matrices[:, 0], matrices[:, 1])
 
     return matrices.squeeze(0)
 
@@ -138,7 +136,7 @@ class ContinuumSolver:
         """
 
         self.V = V
-        self.dx = (x_max + x_min) / x_steps
+        self.dx = (x_max + x_min) / (x_steps + 1)
 
         self.x_vals_full = torch.linspace(
             x_min, x_max, x_steps + 1, device=DEVICE
@@ -146,6 +144,50 @@ class ContinuumSolver:
         # throwing out first element corresponding to identity
         self.x_vals = self.x_vals_full[1:]
 
+    def a(self, k: torch.Tensor, E: torch.Tensor) -> torch.Tensor:
+        """Constructs the A matrix.
+
+        Arguments:
+            k (Tensor): Tensor of k values.
+            E (Tensor): Tensor of energies.
+
+        Returns:
+            a (Tensor): The A matrix with the shape of (x, k, E, 2, 2).
+        """
+        a = torch.zeros(
+            self.x_vals.shape + k.shape + E.shape + (2, 2),
+            dtype=DTYPE,
+            device=DEVICE,
+        )
+        V_expanded = (
+            self.V(self.x_vals)
+            .unsqueeze(-1)
+            .unsqueeze(-1)
+            .expand(self.x_vals.shape + k.shape + E.shape)
+        )
+        # converting to complex numbers so roots of negatives are evaluated correctly
+        E_expanded = (
+            E.unsqueeze(0)
+            .unsqueeze(0)
+            .expand(self.x_vals.shape + k.shape + E.shape)
+            .to(DTYPE)
+        )
+        k_expanded = (
+            k.unsqueeze(0)
+            .unsqueeze(-1)
+            .expand(self.x_vals.shape + k.shape + E.shape)
+        )
+
+        # using analytical formula to create A matrix
+        a[..., 0, 0] = 0
+        a[..., 0, 1] = 1
+        # can't use delta here due to numerical errors
+        a[..., 1, 0] = 2 * (V_expanded - E_expanded) + k_expanded**2
+        a[..., 1, 1] = -2j * k_expanded
+
+        # moving dimensions so output is (x, k, E, 2, 2) to make leading dimensions batch dimensions
+        return a
+    
     def delta(self, k: torch.Tensor, E: torch.Tensor) -> torch.Tensor:
         """Creates the delta quantity which is $\sqrt(2(V - E))$.
 
@@ -171,36 +213,6 @@ class ContinuumSolver:
         )
 
         return torch.sqrt(2 * (V_expanded - E_expanded))
-
-    def a(self, k: torch.Tensor, E: torch.Tensor) -> torch.Tensor:
-        """Constructs the A matrix.
-
-        Arguments:
-            k (Tensor): Tensor of k values.
-            E (Tensor): Tensor of energies.
-
-        Returns:
-            a (Tensor): The A matrix with the shape of (x, k, E, 2, 2).
-        """
-        a = torch.zeros(
-            self.x_vals.shape + k.shape + E.shape + (2, 2),
-            dtype=DTYPE,
-            device=DEVICE,
-        )
-        k_expanded = (
-            k.unsqueeze(0)
-            .unsqueeze(-1)
-            .expand(self.x_vals.shape + k.shape + E.shape)
-        )
-
-        # using analytical formula to create A matrix
-        a[..., 0, 0] = 0
-        a[..., 0, 1] = 1
-        a[..., 1, 0] = self.delta(k, E) ** 2 + k_expanded**2
-        a[..., 1, 1] = -2j * k_expanded
-
-        # moving dimensions so output is (x, k, E, 2, 2) to make leading dimensions batch dimensions
-        return a
 
     def a_exp(self, k: torch.Tensor, E: torch.Tensor) -> torch.Tensor:
         """Constructs the matrix exponential of A using the analytical formula.
@@ -251,7 +263,6 @@ class ContinuumSolver:
         )
 
         # normalzing a_exp by multiplying by e^-delta
-        # TODO: is torch.abs really needed here?
         norm = (
             torch.abs(torch.exp(-1 * delta * self.dx))
             .unsqueeze(-1)
@@ -260,29 +271,7 @@ class ContinuumSolver:
         )
         return a_exp * norm
 
-    def a_exp_inv(self, k: torch.Tensor, E: torch.Tensor) -> torch.Tensor:
-        """Constructs the inverse of the matrix exponential of A using the known inverse formula.
-
-        Arguments:
-            k (Tensor): Tensor of k values.
-            E (Tensor): Tensor of energies.
-
-        Returns:
-            a_exp_inv (Tensor): Inverse matrix exponential of A with the shape of (x, k, E, 2, 2).
-        """
-        # NOTE: I think the other function is actually faster, but not sure if it is more accurate
-        delta = self.delta(k, E)
-        # first multiply by e^delta to cancel e^-delta in a_exp, then again so the inverse properly cancels with a_exp
-        # leads to e^2*delta as the norm
-        norm = (
-            torch.abs(torch.exp(2 * delta * self.dx))
-            .unsqueeze(-1)
-            .unsqueeze(-1)
-            .expand(self.x_vals.shape + k.shape + E.shape + (2, 2))
-        )
-        return inverse_2by2(self.a_exp(k, E)) * norm
-
-    def a_exp_inv_direct(
+    def a_exp_inv(
         self, k: torch.Tensor, E: torch.Tensor
     ) -> torch.Tensor:
         """Constructs the inverse of the matrix exponential of A using the known inverse fomrula.
@@ -337,7 +326,6 @@ class ContinuumSolver:
 
         # normalzing a_exp_inv by multiplying by e^delta
         # positive so it cancels with a_exp
-        # TODO: is torch.abs really needed here?
         norm = (
             torch.abs(torch.exp(delta * self.dx))
             .unsqueeze(-1)
