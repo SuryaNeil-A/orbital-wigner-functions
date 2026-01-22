@@ -1,6 +1,8 @@
 import torch
 from collections.abc import Callable
 import matplotlib.pyplot as plt
+from numpy.typing import NDArray
+from numpy import float64
 
 # necessary for linear algebra
 torch.backends.cuda.preferred_linalg_library("magma")
@@ -12,7 +14,7 @@ DEVICE = (
     else "cpu"
 )
 # set default datatype of tensors
-DTYPE = torch.complex64
+DTYPE = torch.complex128
 
 
 def sign_change(matrices: torch.Tensor) -> torch.Tensor:
@@ -29,8 +31,8 @@ def sign_change(matrices: torch.Tensor) -> torch.Tensor:
     signed_matrices = torch.sign(matrices)
     # takes adjacent elements and multiplies, if <= 0 then a sign change occured
     change_index = torch.argwhere(
-        signed_matrices[:-1] * signed_matrices[1:] <= 0
-    ).squeeze(dim=1)
+        signed_matrices[..., :-1] * signed_matrices[..., 1:] <= 0
+    ).squeeze(-1)
     return change_index
 
 
@@ -111,9 +113,59 @@ def collapse(matrices: torch.Tensor) -> torch.Tensor:
     return matrices.squeeze(0)
 
 
-class ContinuumSolver:
+def clean_input(input: torch.Tensor | NDArray | float) -> torch.Tensor:
+    """Cleans up input value for processing by the solver.
+    
+    Example: If input is a float, converts it to a tensor.
+    Example 2: If input is a single element tensor (with empty shape), it converts it to a tensor with shape 1.
+
+    Arguments:
+        input (Tensor, NDArray, float): Input value to clean up.
+
+    Returns:
+        input (Tensor): Cleaned up input.
     """
-    Class to solve for the eigenvalues and eigenfunctions of a 1-D period system.
+    if type(input) is float:
+        input = torch.tensor([input], device=DEVICE)
+    # TODO: fix the or statement
+    elif type(input) is float64:
+        input = torch.tensor([input], device=DEVICE)
+    elif type(input) is int:
+        input = torch.tensor([input], device=DEVICE)
+    elif type(input) is NDArray:
+        input = torch.from_numpy(input).to(device=DEVICE)
+    elif type(input) is not torch.Tensor:
+        raise TypeError("Type not supported. Try converting to float, Numpy Array, or PyTorch Tensor.")
+    elif input.shape == torch.Size([]):
+        input = input.unsqueeze(0)     
+
+    return input
+
+
+def false_position(
+    func: Callable[[torch.Tensor], torch.Tensor],
+    x_min: float,
+    x_max: float,
+    tol: float = 1e-6,
+    x_steps: int = 1024
+):
+    """Solves for the roots of a function using the false position method.
+    Leading dimensions of the function output are treated as batch dimensions.
+
+    Arguments:
+        func (Callabale): Function to find the roots of in given interval.
+        x_min (float): Minimum x for interval.
+        x_max (float): Maximum x for interval.
+        tol (float): Tolerance for the error on the roots.
+        x_steps (int): Number of x points to generate by default.
+    """
+    x_vals = torch.linspace(x_min, x_max, x_steps, device=DEVICE)
+    y_vals = func(x_vals)
+    sign_change_y = sign_change(y_vals)
+
+
+class ContinuumSolver:
+    """Class to solve for the eigenvalues and eigenfunctions of a 1-D period system.
 
     Attributes:
         TODO: fill this in
@@ -136,7 +188,8 @@ class ContinuumSolver:
         """
 
         self.V = V
-        self.dx = (x_max + x_min) / (x_steps + 1)
+        assert x_min == 0, "x_min must be zero (for now)."
+        self.dx = (x_max + x_min) / x_steps
 
         self.x_vals_full = torch.linspace(
             x_min, x_max, x_steps + 1, device=DEVICE
@@ -187,7 +240,7 @@ class ContinuumSolver:
 
         # moving dimensions so output is (x, k, E, 2, 2) to make leading dimensions batch dimensions
         return a
-    
+
     def delta(self, k: torch.Tensor, E: torch.Tensor) -> torch.Tensor:
         """Creates the delta quantity which is $\sqrt(2(V - E))$.
 
@@ -271,9 +324,7 @@ class ContinuumSolver:
         )
         return a_exp * norm
 
-    def a_exp_inv(
-        self, k: torch.Tensor, E: torch.Tensor
-    ) -> torch.Tensor:
+    def a_exp_inv(self, k: torch.Tensor, E: torch.Tensor) -> torch.Tensor:
         """Constructs the inverse of the matrix exponential of A using the known inverse fomrula.
 
         Instead of computing a_exp first and inverting, this inverts first and then computes a_exp_inv directly.
@@ -363,29 +414,35 @@ class ContinuumSolver:
         pass
 
     def loss(
-        self, k: torch.Tensor | float | int, E: torch.Tensor | float | int
+        self,
+        k: torch.Tensor | NDArray | float,
+        E: torch.Tensor | NDArray | float
     ) -> torch.Tensor:
         """Compputes the loss function for the system given k and E values.
 
         Arguments:
-            k (Tensor, float, int): Tensor of k values (or a single number, which it will convert to a Tensor).
-            E (Tensor, float, int): Tensor of energies (or a single number, which it will convert to a Tensor).
+            k (Tensor, NDArray, float): Tensor/array of k values (or a single number, which it will convert to a Tensor).
+            E (Tensor, NDArray, float): Tensor/array of energies (or a single number, which it will convert to a Tensor).
 
         Returns:
             loss (Tensor): Tensor of loss values for the given k and E, with shape (k, E).
         """
         # TODO: consider if there is an error with k/E as numpy array
-        if type(E) is not torch.Tensor:
-            print("converting")
-            E = torch.tensor([E], device=DEVICE)
-        if type(k) is not torch.Tensor:
-            k = torch.tensor([k], device=DEVICE)
+        E = clean_input(E)
+        # E = torch.tensor(E, device=DEVICE)
+        k = clean_input(k)
 
-        norm = torch.sum(torch.real(self.delta(k, E) * self.dx), dim=0)
-        matrices = self.collapse_a_exp(k, E)
+        norm = torch.sum(
+            torch.real(self.delta(clean_input(0.), E) * self.dx), dim=0
+        )
+        matrices = self.collapse_a_exp(clean_input(0.), E)
 
-        loss = torch.real(trace_2by2(matrices)) * torch.exp(norm)
-        return loss.squeeze()
+        loss = (torch.real(trace_2by2(matrices)) * torch.exp(norm)).squeeze()
+
+        return (
+            loss.unsqueeze(0).expand(k.shape + E.shape)
+            - (2 * torch.cos(k)).unsqueeze(-1).expand(k.shape + E.shape)
+        ).squeeze()
 
     def im_loss(self, k, E):
         """TODO"""
@@ -399,9 +456,144 @@ class ContinuumSolver:
         """TODO"""
         pass
 
-    def eigenvals(self):
-        """Finds the eigenvalues for the given system."""
-        pass
+    def solve_eigenvals(
+        self,
+        k: torch.Tensor | NDArray | float,
+        E_min: float = 0,
+        E_max: float = 10,
+        E_tol: float = 1e-6,
+        E_steps: int = 1024,
+        save_eigenvals: bool = True
+    ) -> torch.Tensor:
+        """Finds the eigenvalues for the given system using the false-point method.
+        
+        Arguments:
+            k (Tensor, NDAarray, float): Tensor/array of k values (or a single number, which it will convert to a Tensor).
+            E_min (float): Minimum energy for interval.
+            E_max (float): Maximum energy for interval.
+            E_tol (float): Tolerance for the error on the eigenvalues.
+            E_steps (int): Number of E points to generate for loss function.
+        Returns:
+            eigenvals (Tensor): Tensor of eigenvalues for the given k.
+        """
+        k = clean_input(k)
+
+        eigenvals = false_position(
+            lambda E: self.loss(k, E),
+            E_min,
+            E_max,
+            E_tol,
+            E_steps
+        )
+
+        if save_eigenvals:
+            self.eigenvals = eigenvals
+            self.eigenvals_k = k
+
+        return eigenvals
+    
+    def transfer_matrix(
+            self, k: torch.Tensor, E: torch.Tensor
+        ) -> torch.Tensor:
+        """Constructs the transfer matrix using the analytical formula.
+
+        Arguments:
+            k (Tensor): Tensor of k values.
+            E (Tensor): Tensor of energies.
+
+        Returns:
+            transfer_matrix (Tensor): Transfer matrix of A with the shape of (x, k, E, 2, 2).
+        """
+        delta = self.delta(k, E)
+        transfer_matrix = torch.zeros(
+            self.x_vals.shape + k.shape + E.shape + (2, 2),
+            device=DEVICE,
+            dtype=DTYPE,
+        )
+        V_expanded = (
+            self.V(self.x_vals)
+            .unsqueeze(-1)
+            .unsqueeze(-1)
+            .expand(self.x_vals.shape + k.shape + E.shape)
+        )
+
+        # using analytical formula to construct transfer matrix
+        transfer_matrix[..., 0, 0] = (
+            2 * torch.cosh(delta * self.dx)
+            + 2 * V_expanded * self.dx * torch.sinh(delta * self.dx) / delta
+        )
+        transfer_matrix[..., 0, 1] = -1
+        transfer_matrix[..., 1, 0] = 1
+        transfer_matrix[..., 1, 1] = 0
+
+        # normalzing a_exp by multiplying by e^-delta
+        norm = (
+            torch.abs(torch.exp(-1 * delta * self.dx))
+            .unsqueeze(-1)
+            .unsqueeze(-1)
+            .expand(transfer_matrix.shape)
+        )
+        return transfer_matrix * norm
+    
+    def solve_eigenstate(
+        self,
+        E: torch.Tensor | NDArray | float,
+        initial_condit: str = "symmetric",
+    ) -> torch.Tensor:
+        """Compputes the eigenstate for the system given k and E values.
+
+        Arguments:
+            E (Tensor, NDArray, float): Tensor/array of energies (or a single number, which it will convert to a Tensor).
+            initial_condit (str): Initial conditions to apply, either symmetric or antisymmetric.
+
+        Returns:
+            eigenstate (Tensor): Tensor of eigenstate for given k and e, with shape (x).
+        """
+        E = clean_input(E)
+
+        eigenstate = torch.zeros(
+            self.x_vals_full.shape + E.shape + (2, 1),
+            device=DEVICE,
+            dtype=DTYPE
+        )
+        deviation = torch.zeros(self.x_vals.shape)
+        norm_list = torch.zeros(self.x_vals.shape)
+        norm_total = torch.ones(self.x_vals_full.shape)
+        norm_total[0] = 1
+
+        transfer_matrix = self.transfer_matrix(clean_input(0.), E).squeeze(1)
+        
+        match initial_condit:
+            case "symmetric":
+                initial_conditions = torch.tensor(
+                    [[1e-6], [0]], device=DEVICE
+                ).unsqueeze(0).expand(E.shape + (2, 1))
+            case "antisymmetric":
+                initial_conditions = torch.tensor(
+                    [[0], [1]], device=DEVICE
+                ).unsqueeze(0).expand(E.shape + (2, 1))
+            case _:
+                raise ValueError("initial_condit must be either 'symmetric' or 'antisymmetric'.")
+        
+        eigenstate[0] = initial_conditions
+
+        for i in range(len(self.x_vals)):
+            eigenstate[i + 1] = torch.matmul(transfer_matrix[i], eigenstate[i])
+            norm = eigenstate[i + 1, ..., 0, 0]
+            print(f"Norm = {norm}")
+            norm_list[i] = norm
+            print(norm_total[i+1])
+
+            # if i > 512:
+            norm_total[i + 1] = norm * norm_total[i]
+            
+            eigenstate[i + 1] *= torch.nan_to_num(1/norm, nan=1.)
+            deviation[i] = torch.abs(
+                eigenstate[i + 1, ..., 1, 0] - eigenstate[i, ..., 0, 0]
+            )
+            # assert deviation <= 0.1, "Deviation too high, something went wrong."
+
+        return eigenstate.squeeze(1), norm_total
 
     def eigenstate_symmetric(self):
         pass
@@ -411,7 +603,7 @@ class ContinuumSolver:
 
     def plot_loss(
         self,
-        k: torch.Tensor | float | int,
+        k: torch.Tensor | NDArray | float,
         E: torch.Tensor,
         x_min: float | None = None,
         x_max: float | None = None,
@@ -422,7 +614,7 @@ class ContinuumSolver:
         """Plots the loss function given a Tensor of energies and k values.
 
         Arguments:
-            k (Tensor, float, int): Tensor or number of k values.
+            k (Tensor, NDArray, float): Tensor/array of k values, or a single number.
             E (Tensor): Tensor of energies.
             x_min (float, None): Minimum x value for the plot.
             x_max (float, None): Maximum x value for the plot.
@@ -430,12 +622,16 @@ class ContinuumSolver:
             y_max (float, None): Maximum y value for the plot.
             log_scale (bool): Whether to plot y on a log scale.
         """
-        loss = self.loss(k, E).cpu()
+        k = clean_input(k)
         E_cpu = E.cpu()
 
         fig, ax = plt.subplots(figsize=(10, 8))
 
-        ax.plot(E_cpu, loss, label="Loss", color="tab:orange")
+        for i in range(len(k)):
+            # not doing k's in parallel for memory savings
+            # surely nobody will plot 1024 k curves anyways, right?
+            loss = self.loss(k[i].item(), E).cpu()
+            ax.plot(E_cpu, loss, label=f"k = {k[i].item():.2f} Loss")
 
         ax.legend()
         ax.grid()
