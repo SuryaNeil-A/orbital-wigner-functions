@@ -520,7 +520,7 @@ class ContinuumSolver:
         # using analytical formula to construct transfer matrix
         transfer_matrix[..., 0, 0] = (
             2 * torch.cosh(delta * self.dx)
-            + 2 * V_expanded * self.dx * torch.sinh(delta * self.dx) / delta
+            - 2 * V_expanded * self.dx * torch.sinh(delta * self.dx) / delta
         )
         transfer_matrix[..., 0, 1] = -1
         transfer_matrix[..., 1, 0] = 1
@@ -566,7 +566,7 @@ class ContinuumSolver:
         match initial_condit:
             case "symmetric":
                 initial_conditions = torch.tensor(
-                    [[1e-6], [0]], device=DEVICE
+                    [[1e-3], [0]], device=DEVICE
                 ).unsqueeze(0).expand(E.shape + (2, 1))
             case "antisymmetric":
                 initial_conditions = torch.tensor(
