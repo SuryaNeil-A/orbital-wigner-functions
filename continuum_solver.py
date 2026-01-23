@@ -1,8 +1,10 @@
 import torch
 from collections.abc import Callable
 import matplotlib.pyplot as plt
+import numpy as np
+from numpy import float64, ndarray
 from numpy.typing import NDArray
-from numpy import float64
+import scipy as sp
 
 # necessary for linear algebra
 torch.backends.cuda.preferred_linalg_library("magma")
@@ -113,31 +115,30 @@ def collapse(matrices: torch.Tensor) -> torch.Tensor:
     return matrices.squeeze(0)
 
 
-def clean_input(input: torch.Tensor | NDArray | float) -> torch.Tensor:
+def clean_input(input: torch.Tensor | NDArray | float | int) -> torch.Tensor:
     """Cleans up input value for processing by the solver.
-    
+
     Example: If input is a float, converts it to a tensor.
     Example 2: If input is a single element tensor (with empty shape), it converts it to a tensor with shape 1.
 
     Arguments:
-        input (Tensor, NDArray, float): Input value to clean up.
+        input (Tensor, NDArray, float, int): Input value to clean up.
 
     Returns:
         input (Tensor): Cleaned up input.
     """
-    if type(input) is float:
-        input = torch.tensor([input], device=DEVICE)
-    # TODO: fix the or statement
-    elif type(input) is float64:
-        input = torch.tensor([input], device=DEVICE)
-    elif type(input) is int:
-        input = torch.tensor([input], device=DEVICE)
-    elif type(input) is NDArray:
-        input = torch.from_numpy(input).to(device=DEVICE)
-    elif type(input) is not torch.Tensor:
-        raise TypeError("Type not supported. Try converting to float, Numpy Array, or PyTorch Tensor.")
-    elif input.shape == torch.Size([]):
-        input = input.unsqueeze(0)     
+    match input:
+        case float() | int() | float64():
+            input = torch.tensor([input], device=DEVICE)
+        case ndarray():
+            input = torch.from_numpy(input).to(device=DEVICE)
+        case torch.Tensor():
+            if input.shape == torch.Size([]):
+                input = input.unsqueeze(0)
+        case _:
+            raise TypeError(
+                "Type not supported. Try converting to float, Numpy Array, or PyTorch Tensor."
+            )
 
     return input
 
@@ -147,7 +148,7 @@ def false_position(
     x_min: float,
     x_max: float,
     tol: float = 1e-6,
-    x_steps: int = 1024
+    x_steps: int = 1024,
 ):
     """Solves for the roots of a function using the false position method.
     Leading dimensions of the function output are treated as batch dimensions.
@@ -163,6 +164,30 @@ def false_position(
     y_vals = func(x_vals)
     sign_change_y = sign_change(y_vals)
 
+
+def symmetric(ya: NDArray, yb: NDArray) -> NDArray:
+    """Function to evaluate for symmetric period boundary conditions (derivative opposite sign).
+    
+    Arguments:
+        ya (NDArray): (2,) array of y and its derivative values at the left edge.
+        yb (NDArray): (2,) array of y and its derivative at the right edge.
+
+    Returns:
+        residuals (NDArray): (2,) array containing the residuals.
+    """
+    return np.array([ya[0] - yb[0], ya[1] + yb[1]])
+
+def asymmetric(ya: NDArray, yb: NDArray) -> NDArray:
+    """Function to evaluate for symmetric period boundary conditions (derivative opposite sign).
+    
+    Arguments:
+        ya (NDArray): (2,) array of y and its derivative values at the left edge.
+        yb (NDArray): (2,) array of y and its derivative at the right edge.
+
+    Returns:
+        residuals (NDArray): (2,) array containing the residuals.
+    """
+    return np.array([ya[0] - yb[0], ya[1] - yb[1]])
 
 class ContinuumSolver:
     """Class to solve for the eigenvalues and eigenfunctions of a 1-D period system.
@@ -415,14 +440,14 @@ class ContinuumSolver:
 
     def loss(
         self,
-        k: torch.Tensor | NDArray | float,
-        E: torch.Tensor | NDArray | float
+        k: torch.Tensor | NDArray | float | int,
+        E: torch.Tensor | NDArray | float | int,
     ) -> torch.Tensor:
         """Compputes the loss function for the system given k and E values.
 
         Arguments:
-            k (Tensor, NDArray, float): Tensor/array of k values (or a single number, which it will convert to a Tensor).
-            E (Tensor, NDArray, float): Tensor/array of energies (or a single number, which it will convert to a Tensor).
+            k (Tensor, NDArray, float, int): Tensor/array of k values (or a single number, which it will convert to a Tensor).
+            E (Tensor, NDArray, float, int): Tensor/array of energies (or a single number, which it will convert to a Tensor).
 
         Returns:
             loss (Tensor): Tensor of loss values for the given k and E, with shape (k, E).
@@ -433,9 +458,9 @@ class ContinuumSolver:
         k = clean_input(k)
 
         norm = torch.sum(
-            torch.real(self.delta(clean_input(0.), E) * self.dx), dim=0
+            torch.real(self.delta(clean_input(0.0), E) * self.dx), dim=0
         )
-        matrices = self.collapse_a_exp(clean_input(0.), E)
+        matrices = self.collapse_a_exp(clean_input(0.0), E)
 
         loss = (torch.real(trace_2by2(matrices)) * torch.exp(norm)).squeeze()
 
@@ -458,15 +483,15 @@ class ContinuumSolver:
 
     def solve_eigenvals(
         self,
-        k: torch.Tensor | NDArray | float,
+        k: torch.Tensor | NDArray | float | int,
         E_min: float = 0,
         E_max: float = 10,
         E_tol: float = 1e-6,
         E_steps: int = 1024,
-        save_eigenvals: bool = True
+        save_eigenvals: bool = True,
     ) -> torch.Tensor:
         """Finds the eigenvalues for the given system using the false-point method.
-        
+
         Arguments:
             k (Tensor, NDAarray, float): Tensor/array of k values (or a single number, which it will convert to a Tensor).
             E_min (float): Minimum energy for interval.
@@ -479,11 +504,7 @@ class ContinuumSolver:
         k = clean_input(k)
 
         eigenvals = false_position(
-            lambda E: self.loss(k, E),
-            E_min,
-            E_max,
-            E_tol,
-            E_steps
+            lambda E: self.loss(k, E), E_min, E_max, E_tol, E_steps
         )
 
         if save_eigenvals:
@@ -491,10 +512,10 @@ class ContinuumSolver:
             self.eigenvals_k = k
 
         return eigenvals
-    
+
     def transfer_matrix(
-            self, k: torch.Tensor, E: torch.Tensor
-        ) -> torch.Tensor:
+        self, k: torch.Tensor, E: torch.Tensor
+    ) -> torch.Tensor:
         """Constructs the transfer matrix using the analytical formula.
 
         Arguments:
@@ -534,16 +555,16 @@ class ContinuumSolver:
             .expand(transfer_matrix.shape)
         )
         return transfer_matrix * norm
-    
-    def solve_eigenstate(
+
+    def solve_eigenstate_matrix(
         self,
-        E: torch.Tensor | NDArray | float,
+        E: torch.Tensor | NDArray | float | int,
         initial_condit: str = "symmetric",
     ) -> torch.Tensor:
-        """Compputes the eigenstate for the system given k and E values.
+        """Computes the eigenstate for the system given k and E values.
 
         Arguments:
-            E (Tensor, NDArray, float): Tensor/array of energies (or a single number, which it will convert to a Tensor).
+            E (Tensor, NDArray, float, int): Tensor/array of energies (or a single number, which it will convert to a Tensor).
             initial_condit (str): Initial conditions to apply, either symmetric or antisymmetric.
 
         Returns:
@@ -554,46 +575,147 @@ class ContinuumSolver:
         eigenstate = torch.zeros(
             self.x_vals_full.shape + E.shape + (2, 1),
             device=DEVICE,
-            dtype=DTYPE
+            dtype=DTYPE,
         )
         deviation = torch.zeros(self.x_vals.shape)
         norm_list = torch.zeros(self.x_vals.shape)
         norm_total = torch.ones(self.x_vals_full.shape)
         norm_total[0] = 1
 
-        transfer_matrix = self.transfer_matrix(clean_input(0.), E).squeeze(1)
-        
+        transfer_matrix = self.transfer_matrix(clean_input(0.0), E).squeeze(1)
+
         match initial_condit:
             case "symmetric":
-                initial_conditions = torch.tensor(
-                    [[1e-3], [0]], device=DEVICE
-                ).unsqueeze(0).expand(E.shape + (2, 1))
+                initial_conditions = (
+                    torch.tensor([[1e-3], [0]], device=DEVICE)
+                    .unsqueeze(0)
+                    .expand(E.shape + (2, 1))
+                )
             case "antisymmetric":
-                initial_conditions = torch.tensor(
-                    [[0], [1]], device=DEVICE
-                ).unsqueeze(0).expand(E.shape + (2, 1))
+                initial_conditions = (
+                    torch.tensor([[0], [1]], device=DEVICE)
+                    .unsqueeze(0)
+                    .expand(E.shape + (2, 1))
+                )
             case _:
-                raise ValueError("initial_condit must be either 'symmetric' or 'antisymmetric'.")
-        
+                raise ValueError(
+                    "initial_condit must be either 'symmetric' or 'antisymmetric'."
+                )
+
         eigenstate[0] = initial_conditions
 
         for i in range(len(self.x_vals)):
             eigenstate[i + 1] = torch.matmul(transfer_matrix[i], eigenstate[i])
             norm = eigenstate[i + 1, ..., 0, 0]
-            print(f"Norm = {norm}")
+            # print(f"Norm = {norm}")
             norm_list[i] = norm
-            print(norm_total[i+1])
+            # print(norm_total[i + 1])
 
             # if i > 512:
             norm_total[i + 1] = norm * norm_total[i]
-            
-            eigenstate[i + 1] *= torch.nan_to_num(1/norm, nan=1.)
+
+            eigenstate[i + 1] *= torch.nan_to_num(1 / norm, nan=1.0)
             deviation[i] = torch.abs(
                 eigenstate[i + 1, ..., 1, 0] - eigenstate[i, ..., 0, 0]
             )
             # assert deviation <= 0.1, "Deviation too high, something went wrong."
 
         return eigenstate.squeeze(1), norm_total
+
+    def a_ode(
+        self,
+        t: NDArray | float | int,
+        y: NDArray,
+        k: float | int,
+        E: float | int,
+    ) -> NDArray:
+        """ODE to solve the eigenstate given a particular k and E value.
+
+        Returns a vector of the derivatives of the y vector.
+        Everything is done in numpy because scipy cannot take in torch Tensors.
+
+        Arguments:
+            t (NDArray, float, int): Array (or number) of x values to evaluate the derivative at (ODE solver treats x as time or t).
+            y (NDarray): A (2,) array input y vector.
+            k: (float, int): The k value to find the derivative at.
+            E: (float, int): The energy to find the derivative at.
+
+        Returns:
+            derivative (NDarray): Derivative of the input evaluated according to the A matrix.
+        """
+
+        a = np.zeros((2, 2), dtype=np.complex128)
+
+        a[0, 0] = 0
+        a[0, 1] = 1
+        a[1, 0] = 2 * (self.V(clean_input(t).numpy(force=True)) - E) + k**2
+        a[1, 1] = -2j * k
+
+        return np.matmul(y, a.T)
+
+    def solve_eigenstate_ode(
+        self,
+        k: float | int,
+        E: float | int,
+        solution_type: str = "auto"
+    ) -> NDArray:
+        """Solves the coupled ODEs to find the eigenstate at a particular E and k value.
+
+        Arguments:
+            k (float, int): k value to use when solving the ODE.
+            E (float, int): E value to use when solving  the ODE.
+
+        Returns:
+            eigenstate (NDarray): Eigenstate evaluated at the class' initialized x values.
+
+        """
+        right_half_x_vals = self.x_vals_full[(len(self.x_vals_full) // 2):]
+        match solution_type:
+            case "auto":
+                try:
+                    right_sol = sp.integrate.solve_ivp(
+                        lambda t, y: self.a_ode(t, y, 0, E),
+                        t_span=(right_half_x_vals[0].item(), right_half_x_vals[-1].item()),
+                        y0=np.array([1, 0], dtype=np.complex64),
+                        t_eval=right_half_x_vals.numpy(force=True),
+                        method="DOP853"
+                    )
+                    left_sol = right_sol.y[0][::-1]
+                    assert np.abs(right_sol.y[1]).max() != np.abs(right_sol.y[1][-1])
+                except AssertionError:
+                    right_sol = sp.integrate.solve_ivp(
+                        lambda t, y: self.a_ode(t, y, 0, E),
+                        t_span=(right_half_x_vals[0].item(), right_half_x_vals[-1].item()),
+                        y0=np.array([0, 1], dtype=np.complex64),
+                        t_eval=right_half_x_vals.numpy(force=True),
+                        method="DOP853"
+                    )
+                    left_sol = -1*right_sol.y[0][::-1]
+                    assert np.abs(right_sol.y[0]).max() != np.abs(right_sol.y[0][-1]), "Solver could not find a valid eigenstate."
+            case "symmetric":
+                right_sol = sp.integrate.solve_ivp(
+                        lambda t, y: self.a_ode(t, y, 0, E),
+                        t_span=(right_half_x_vals[0].item(), right_half_x_vals[-1].item()),
+                        y0=np.array([1, 0], dtype=np.complex64),
+                        t_eval=right_half_x_vals.numpy(force=True),
+                        method="DOP853"
+                    )
+                left_sol = right_sol.y[0][::-1]
+            case "antisymmetric":
+                right_sol = sp.integrate.solve_ivp(
+                        lambda t, y: self.a_ode(t, y, 0, E),
+                        t_span=(right_half_x_vals[0].item(), right_half_x_vals[-1].item()),
+                        y0=np.array([0, 1], dtype=np.complex64),
+                        t_eval=right_half_x_vals.numpy(force=True),
+                        method="DOP853"
+                    )
+                left_sol = -1*right_sol.y[0][::-1]
+            case _:
+                raise ValueError("Solution type must be either 'auto', 'symmetric', or 'antisymmetric'.")
+
+        sol = np.concat((left_sol, right_sol.y[0][1:]))
+
+        return sol / np.sum(np.abs(sol)**2 * self.dx)
 
     def eigenstate_symmetric(self):
         pass
@@ -603,7 +725,7 @@ class ContinuumSolver:
 
     def plot_loss(
         self,
-        k: torch.Tensor | NDArray | float,
+        k: torch.Tensor | NDArray | float | int,
         E: torch.Tensor,
         x_min: float | None = None,
         x_max: float | None = None,
@@ -611,10 +733,10 @@ class ContinuumSolver:
         y_max: float | None = None,
         log_scale: bool = False,
     ) -> None:
-        """Plots the loss function given a Tensor of energies and k values.
+        """Plots the loss function given energies and k values.
 
         Arguments:
-            k (Tensor, NDArray, float): Tensor/array of k values, or a single number.
+            k (Tensor, NDArray, float, int): Tensor/array of k values, or a single number.
             E (Tensor): Tensor of energies.
             x_min (float, None): Minimum x value for the plot.
             x_max (float, None): Maximum x value for the plot.
@@ -651,5 +773,95 @@ class ContinuumSolver:
     def plot_band_structure(self):
         pass
 
-    def plot_eigenstate(self):
-        pass
+    def plot_eigenstate(
+        self,
+        k: torch.Tensor | NDArray | float | int,
+        E: float | int,
+        solution_type: str = "auto",
+        energy_guess: float | int = 0.51,
+        x_min: float | None = None,
+        x_max: float | None = None,
+        y_min: float | None = None,
+        y_max: float | None = None,
+        plot_real: bool = True,
+        plot_imag: bool = False,
+        plot_prob: bool = False,
+        log_scale: bool = False,
+    ) -> None:
+        """Plots the eigenstate given energies and k values.
+
+        Arguments:
+            k (Tensor, NDArray, float, int): Tensor/array of k values, or a single number.
+            E (float, int): Single number for energy to find eigenstate at.
+            x_min (float, None): Minimum x value for the plot.
+            x_max (float, None): Maximum x value for the plot.
+            y_min (float, None): Minimum y value for the plot.
+            y_max (float, None): Maximum y value for the plot.
+            plot_real (bool): Whether to plot the real part of the eigenstate.
+            plot_imag (bool): Whether to plot the imaginary part of the eigenstate.
+            plot_prob (bool): Whether to plot the probability density of the eigenstate
+            log_scale (bool): Whether to plot y on a log scale.
+        """
+        k = clean_input(k)
+        x_cpu = self.x_vals_full.cpu()
+        eigenvals = np.zeros(len(k))
+
+        fig, ax = plt.subplots(figsize=(10, 8))
+
+        for i in range(len(k)):
+            # not doing k's in parallel for memory savings
+            # surely nobody will plot 1024 k curves anyways, right?
+            eigenvals[i] = sp.optimize.newton(
+                lambda E: self.loss(k[i], E).item(), energy_guess, maxiter=20
+            )
+            
+            eigenstate = self.solve_eigenstate_ode(
+                k[i].item(), eigenvals[i], solution_type
+            )
+            if plot_real:
+                ax.plot(
+                    x_cpu,
+                    np.real(eigenstate),
+                    label=f"k = {k[i].item():.2f} Real Eigenstate",
+                )
+            if plot_imag:
+                ax.plot(
+                    x_cpu,
+                    np.imag(eigenstate),
+                    label=f"k = {k[i].item():.2f} Imaginary Eigenstate",
+                )
+            if plot_prob:
+                ax.plot(
+                    x_cpu,
+                    np.abs(eigenstate) ** 2,
+                    label=f"k = {k[i].item():.2f} Probability Density",
+                )
+
+        ax.legend()
+        ax.grid()
+        ax.set_title("Eigenstate Plot")
+
+        ax.set_xlabel("x")
+        ax.set_ylabel("Value")
+
+        ax.set_xlim(xmin=x_min, xmax=x_max)
+        ax.set_ylim(ymin=y_min, ymax=y_max)
+
+        if log_scale:
+            ax.set_yscale("log")
+        
+        plt.show()
+
+        # fig2, ax2 = plt.subplots(figsize = (10, 8))
+
+        # ax2.plot(k.cpu(), eigenvals, label="Band Structure")
+        # print(eigenvals)
+
+        # ax2.set_title("Band Structure Plot")
+        # ax2.legend()
+        # ax2.grid()
+
+        # ax2.set_xlabel("k")
+        # ax2.set_ylabel("E")
+
+        # plt.show()
