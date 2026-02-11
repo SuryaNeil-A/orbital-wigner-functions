@@ -160,9 +160,31 @@ def false_position(
         tol (float): Tolerance for the error on the roots.
         x_steps (int): Number of x points to generate by default.
     """
-    x_vals = torch.linspace(x_min, x_max, x_steps, device=DEVICE)
-    y_vals = func(x_vals)
-    sign_change_y = sign_change(y_vals)
+    # first creates initial grid of points to find roots at
+    x_vals_base = torch.linspace(x_min, x_max, x_steps, device=DEVICE)
+    y_vals_base = func(x_vals_base)
+    sign_change_y_base = sign_change(y_vals_base)
+
+    for i in range(len(sign_change_y_base)):
+        # copying data from base values into new tensors
+        # this is so when restarting at a new root, the original linspace is unaffected
+        x_vals = x_vals_base.detach().clone()
+        y_vals = func(x_vals)
+        sign_change_y = sign_change(y_vals)
+
+        # initializing root value to left edge
+        root = func(x_vals[sign_change_y[i]])
+        while func(root) <= tol:
+            x_1 = x_vals[sign_change_y[i]]
+            x_2 = x_vals[sign_change_y[i] + 1]
+            # calculates root by linear interpolation between sign crossing points
+            root = (
+                (x_1 * func(x_2) -  x_2 * func(x_1)) / (func(x_2) - func(x_1))
+            )
+
+            x_vals = torch.linspace(x_1, x_2, x_steps, device=DEVICE)
+            y_vals = func(x_vals)
+            sign_change_y = sign_change(y_vals)
 
 
 def symmetric(ya: NDArray, yb: NDArray) -> NDArray:
