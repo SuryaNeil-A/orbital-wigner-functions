@@ -221,9 +221,9 @@ class ContinuumSolver:
     def __init__(
         self,
         V: Callable[[torch.Tensor], torch.Tensor],
-        x_min: float = 0,
+        x_min: float = 0.,
         x_max: float = 1,
-        x_steps: float = 1024,
+        x_steps: int = 1024,
     ):
         """Initialize the class.
 
@@ -887,3 +887,58 @@ class ContinuumSolver:
         # ax2.set_ylabel("E")
 
         # plt.show()
+
+
+class TimeDependentSolver:
+    """Class to solve for the eigenvalues and eigenfunctions of a 1-D time-dependent periodic system.
+
+    Attributes:
+        TODO: fill this in
+    """
+
+    def __init__(
+        self,
+        V: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+        x_min: float = 0.,
+        x_max: float = 1.,
+        x_steps: int = 1024,
+        t_min: float = 0.,
+        t_max: float = 1.,
+        t_steps: int = 100
+    ):
+        """Initialize the class.
+
+        Arguments:
+            V (Callable): Time-dependent function of the potential (for one period).
+            x_min (float): X value of the left-hand side of one period.
+            x_min (float): X value of the right-hand side of one period.
+            x_steps (int): Number of steps to take up to and including x_max (but not x_min).
+            t_min (float): Starting time value.
+            t_max (float): Ending time value.
+            t_steps (int): Number of time steps to take up to and including t_max/t_min.
+        """
+        pass
+
+    def delta(self):
+        pass
+
+    def delta_squared(self):
+        pass
+
+    def a(self):
+        pass
+
+    def a_exp(self):
+        pass
+
+    def a_exp_inv(self):
+        pass
+
+    def collapse_a_exp(self):
+        pass
+
+    def loss(self):
+        pass
+
+    def plot_loss(self):
+        pass
