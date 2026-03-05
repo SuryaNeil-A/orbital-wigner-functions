@@ -178,8 +178,8 @@ def false_position(
             x_1 = x_vals[sign_change_y[i]]
             x_2 = x_vals[sign_change_y[i] + 1]
             # calculates root by linear interpolation between sign crossing points
-            root = (
-                (x_1 * func(x_2) -  x_2 * func(x_1)) / (func(x_2) - func(x_1))
+            root = (x_1 * func(x_2) - x_2 * func(x_1)) / (
+                func(x_2) - func(x_1)
             )
 
             x_vals = torch.linspace(x_1, x_2, x_steps, device=DEVICE)
@@ -189,7 +189,7 @@ def false_position(
 
 def symmetric(ya: NDArray, yb: NDArray) -> NDArray:
     """Function to evaluate for symmetric period boundary conditions (derivative opposite sign).
-    
+
     Arguments:
         ya (NDArray): (2,) array of y and its derivative values at the left edge.
         yb (NDArray): (2,) array of y and its derivative at the right edge.
@@ -202,7 +202,7 @@ def symmetric(ya: NDArray, yb: NDArray) -> NDArray:
 
 def asymmetric(ya: NDArray, yb: NDArray) -> NDArray:
     """Function to evaluate for symmetric period boundary conditions (derivative opposite sign).
-    
+
     Arguments:
         ya (NDArray): (2,) array of y and its derivative values at the left edge.
         yb (NDArray): (2,) array of y and its derivative at the right edge.
@@ -223,7 +223,7 @@ class ContinuumSolver:
     def __init__(
         self,
         V: Callable[[torch.Tensor], torch.Tensor],
-        x_min: float = 0.,
+        x_min: float = 0.0,
         x_max: float = 1,
         x_steps: int = 1024,
     ):
@@ -678,10 +678,7 @@ class ContinuumSolver:
         return np.matmul(y, a.T)
 
     def solve_eigenstate_ode(
-        self,
-        k: float | int,
-        E: float | int,
-        solution_type: str = "auto"
+        self, k: float | int, E: float | int, solution_type: str = "auto"
     ) -> NDArray:
         """Solves the coupled ODEs to find the eigenstate at a particular E and k value.
 
@@ -693,53 +690,71 @@ class ContinuumSolver:
             eigenstate (NDarray): Eigenstate evaluated at the class' initialized x values.
 
         """
-        right_half_x_vals = self.x_vals_full[(len(self.x_vals_full) // 2):]
+        right_half_x_vals = self.x_vals_full[(len(self.x_vals_full) // 2) :]
         match solution_type:
             case "auto":
                 try:
                     right_sol = sp.integrate.solve_ivp(
                         lambda t, y: self.a_ode(t, y, 0, E),
-                        t_span=(right_half_x_vals[0].item(), right_half_x_vals[-1].item()),
+                        t_span=(
+                            right_half_x_vals[0].item(),
+                            right_half_x_vals[-1].item(),
+                        ),
                         y0=np.array([1, 0], dtype=np.complex64),
                         t_eval=right_half_x_vals.numpy(force=True),
-                        method="DOP853"
+                        method="DOP853",
                     )
                     left_sol = right_sol.y[0][::-1]
-                    assert np.abs(right_sol.y[1]).max() != np.abs(right_sol.y[1][-1])
+                    assert np.abs(right_sol.y[1]).max() != np.abs(
+                        right_sol.y[1][-1]
+                    )
                 except AssertionError:
                     right_sol = sp.integrate.solve_ivp(
                         lambda t, y: self.a_ode(t, y, 0, E),
-                        t_span=(right_half_x_vals[0].item(), right_half_x_vals[-1].item()),
+                        t_span=(
+                            right_half_x_vals[0].item(),
+                            right_half_x_vals[-1].item(),
+                        ),
                         y0=np.array([0, 1], dtype=np.complex64),
                         t_eval=right_half_x_vals.numpy(force=True),
-                        method="DOP853"
+                        method="DOP853",
                     )
-                    left_sol = -1*right_sol.y[0][::-1]
-                    assert np.abs(right_sol.y[0]).max() != np.abs(right_sol.y[0][-1]), "Solver could not find a valid eigenstate."
+                    left_sol = -1 * right_sol.y[0][::-1]
+                    assert np.abs(right_sol.y[0]).max() != np.abs(
+                        right_sol.y[0][-1]
+                    ), "Solver could not find a valid eigenstate."
             case "symmetric":
                 right_sol = sp.integrate.solve_ivp(
-                        lambda t, y: self.a_ode(t, y, 0, E),
-                        t_span=(right_half_x_vals[0].item(), right_half_x_vals[-1].item()),
-                        y0=np.array([1, 0], dtype=np.complex64),
-                        t_eval=right_half_x_vals.numpy(force=True),
-                        method="DOP853"
-                    )
+                    lambda t, y: self.a_ode(t, y, 0, E),
+                    t_span=(
+                        right_half_x_vals[0].item(),
+                        right_half_x_vals[-1].item(),
+                    ),
+                    y0=np.array([1, 0], dtype=np.complex64),
+                    t_eval=right_half_x_vals.numpy(force=True),
+                    method="DOP853",
+                )
                 left_sol = right_sol.y[0][::-1]
             case "antisymmetric":
                 right_sol = sp.integrate.solve_ivp(
-                        lambda t, y: self.a_ode(t, y, 0, E),
-                        t_span=(right_half_x_vals[0].item(), right_half_x_vals[-1].item()),
-                        y0=np.array([0, 1], dtype=np.complex64),
-                        t_eval=right_half_x_vals.numpy(force=True),
-                        method="DOP853"
-                    )
-                left_sol = -1*right_sol.y[0][::-1]
+                    lambda t, y: self.a_ode(t, y, 0, E),
+                    t_span=(
+                        right_half_x_vals[0].item(),
+                        right_half_x_vals[-1].item(),
+                    ),
+                    y0=np.array([0, 1], dtype=np.complex64),
+                    t_eval=right_half_x_vals.numpy(force=True),
+                    method="DOP853",
+                )
+                left_sol = -1 * right_sol.y[0][::-1]
             case _:
-                raise ValueError("Solution type must be either 'auto', 'symmetric', or 'antisymmetric'.")
+                raise ValueError(
+                    "Solution type must be either 'auto', 'symmetric', or 'antisymmetric'."
+                )
 
         sol = np.concat((left_sol, right_sol.y[0][1:]))
 
-        return sol / np.sum(np.abs(sol)**2 * self.dx)
+        return sol / np.sum(np.abs(sol) ** 2 * self.dx)
 
     def eigenstate_symmetric(self):
         pass
@@ -838,7 +853,7 @@ class ContinuumSolver:
             eigenvals[i] = sp.optimize.newton(
                 lambda E: self.loss(k[i], E).item(), energy_guess, maxiter=20
             )
-            
+
             eigenstate = self.solve_eigenstate_ode(
                 k[i].item(), eigenvals[i], solution_type
             )
@@ -873,7 +888,7 @@ class ContinuumSolver:
 
         if log_scale:
             ax.set_yscale("log")
-        
+
         plt.show()
 
         # fig2, ax2 = plt.subplots(figsize = (10, 8))
@@ -901,15 +916,15 @@ class TimeDependentSolver:
     def __init__(
         self,
         V: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
-        x_min: float = 0.,
-        x_max: float = 1.,
+        x_min: float = 0.0,
+        x_max: float = 1.0,
         x_steps: int = 1024,
-        omega: float = 1.,
+        omega: float = 1.0,
     ):
         """Initialize the class.
 
         Arguments:
-            V (Callable): 
+            V (Callable): Tensor of fourier-coefficents.
             x_min (float): X value of the left-hand side of one period.
             x_min (float): X value of the right-hand side of one period.
             x_steps (int): Number of steps to take up to and including x_max (but not x_min).
@@ -926,7 +941,7 @@ class TimeDependentSolver:
         self.x_vals = self.x_vals_full[1:]
 
         # x_steps is just a dummy amount of steps, doesn't matter what it is
-        t_vals = torch.linspace(0, 2*torch.pi/omega, x_steps)
+        t_vals = torch.linspace(0, 2 * torch.pi / omega, x_steps)
 
         max_V = torch.max(V(self.x_vals_full, t_vals))
         self.n_floquet = (2 * max_V) // omega
