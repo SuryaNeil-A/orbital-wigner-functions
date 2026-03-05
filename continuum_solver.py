@@ -199,6 +199,7 @@ def symmetric(ya: NDArray, yb: NDArray) -> NDArray:
     """
     return np.array([ya[0] - yb[0], ya[1] + yb[1]])
 
+
 def asymmetric(ya: NDArray, yb: NDArray) -> NDArray:
     """Function to evaluate for symmetric period boundary conditions (derivative opposite sign).
     
@@ -210,6 +211,7 @@ def asymmetric(ya: NDArray, yb: NDArray) -> NDArray:
         residuals (NDArray): (2,) array containing the residuals.
     """
     return np.array([ya[0] - yb[0], ya[1] - yb[1]])
+
 
 class ContinuumSolver:
     """Class to solve for the eigenvalues and eigenfunctions of a 1-D period system.
@@ -902,28 +904,45 @@ class TimeDependentSolver:
         x_min: float = 0.,
         x_max: float = 1.,
         x_steps: int = 1024,
-        t_min: float = 0.,
-        t_max: float = 1.,
-        t_steps: int = 100
+        omega: float = 1.,
     ):
         """Initialize the class.
 
         Arguments:
-            V (Callable): Time-dependent function of the potential (for one period).
+            V (Callable): 
             x_min (float): X value of the left-hand side of one period.
             x_min (float): X value of the right-hand side of one period.
             x_steps (int): Number of steps to take up to and including x_max (but not x_min).
-            t_min (float): Starting time value.
-            t_max (float): Ending time value.
-            t_steps (int): Number of time steps to take up to and including t_max/t_min.
+            omega (float): Frequency spacing.
         """
-        pass
+        self.V = V
 
-    def delta(self):
-        pass
+        assert x_min == 0, "x_min must be zero (for now)."
+        self.dx = (x_max + x_min) / x_steps
+        self.x_vals_full = torch.linspace(
+            x_min, x_max, x_steps + 1, device=DEVICE
+        )
+        # throwing out first element corresponding to identity
+        self.x_vals = self.x_vals_full[1:]
 
-    def delta_squared(self):
-        pass
+        # x_steps is just a dummy amount of steps, doesn't matter what it is
+        t_vals = torch.linspace(0, 2*torch.pi/omega, x_steps)
+
+        max_V = torch.max(V(self.x_vals_full, t_vals))
+        self.n_floquet = (2 * max_V) // omega
+        self.f_steps = 2 * self.n_floquet + 1
+        self.f_vals = torch.diag(
+            torch.linspace(
+                -self.n_floquet * omega, self.n_floquet * omega, self.f_steps
+            )
+        )
+
+    def delta_squared(self, E: torch.Tensor) -> torch.Tensor:
+        V_expanded = (
+            self.V(self.x_vals, self.f_vals)
+            .unsqeeze(-1)
+            .expand(self.f_vals.shape + E.shape)
+        )
 
     def a(self):
         pass
