@@ -915,10 +915,11 @@ class TimeDependentSolver:
 
     def __init__(
         self,
-        V: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+        V: Callable[[torch.Tensor, int], torch.Tensor],
         x_min: float = 0.0,
         x_max: float = 1.0,
         x_steps: int = 1024,
+        f_steps_min: int = 1,
         omega: float = 1.0,
     ):
         """Initialize the class.
@@ -931,6 +932,7 @@ class TimeDependentSolver:
             omega (float): Frequency spacing.
         """
         self.V = V
+        self.f_steps_min = f_steps_min
 
         assert x_min == 0, "x_min must be zero (for now)."
         self.dx = (x_max + x_min) / x_steps
@@ -940,11 +942,13 @@ class TimeDependentSolver:
         # throwing out first element corresponding to identity
         self.x_vals = self.x_vals_full[1:]
 
-        # x_steps is just a dummy amount of steps, doesn't matter what it is
-        t_vals = torch.linspace(0, 2 * torch.pi / omega, x_steps)
-
-        max_V = torch.max(V(self.x_vals_full, t_vals))
-        self.n_floquet = (2 * max_V) // omega
+        max_V = torch.sum(
+            torch.abs(
+                V(self.x_vals_full, f_steps_min).max(dim=0)
+            )
+        ).item()
+        # TODO: is .item() really necessary?
+        self.n_floquet = np.max([(4 * max_V) // omega, f_steps_min])
         self.f_steps = 2 * self.n_floquet + 1
         self.f_vals = torch.diag(
             torch.linspace(
@@ -953,11 +957,20 @@ class TimeDependentSolver:
         )
 
     def delta_squared(self, E: torch.Tensor) -> torch.Tensor:
-        V_expanded = (
-            self.V(self.x_vals, self.f_vals)
-            .unsqeeze(-1)
-            .expand(self.f_vals.shape + E.shape)
-        )
+        fourier_coeffs = self.V(self.x_vals, self.f_steps_min)
+        V_shape = self.x_vals.shape + self.f_vals.shape
+        V = torch.zeros(V_shape, device=DEVICE, dtype=DTYPE)
+
+        for i in range(2 * self.f_steps_min + 1):
+            diagonal = torch.diag(
+                torch.ones(V_shape, device=DEVICE, dtype=DTYPE),
+                diagonal=i - self.f_steps_min
+            )
+            V += (
+                fourier_coeffs[:, i].expand(V_shape) * diagonal.expand(V_shape)
+            )
+        
+        return V
 
     def a(self):
         pass
