@@ -944,11 +944,13 @@ class TimeDependentSolver:
 
         max_V = torch.sum(
             torch.abs(
-                V(self.x_vals_full, f_steps_min).max(dim=0)
+                torch.max(V(self.x_vals, f_steps_min).real, dim=0).values
             )
         ).item()
         # TODO: is .item() really necessary?
-        self.n_floquet = np.max([(4 * max_V) // omega, f_steps_min])
+        self.n_floquet = int(
+            np.ceil(np.max([(4 * max_V) // omega, f_steps_min]))
+        )
         self.f_steps = 2 * self.n_floquet + 1
         self.f_vals = torch.diag(
             torch.linspace(
@@ -956,21 +958,33 @@ class TimeDependentSolver:
             )
         )
 
-    def delta_squared(self, E: torch.Tensor) -> torch.Tensor:
+    def delta_squared(self, E: torch.Tensor, omega: torch.Tensor) -> torch.Tensor:
         fourier_coeffs = self.V(self.x_vals, self.f_steps_min)
         V_shape = self.x_vals.shape + self.f_vals.shape
         V = torch.zeros(V_shape, device=DEVICE, dtype=DTYPE)
 
-        for i in range(2 * self.f_steps_min + 1):
-            diagonal = torch.diag(
-                torch.ones(V_shape, device=DEVICE, dtype=DTYPE),
-                diagonal=i - self.f_steps_min
-            )
-            V += (
-                fourier_coeffs[:, i].expand(V_shape) * diagonal.expand(V_shape)
-            )
+        V += (
+            fourier_coeffs[
+                :, self.f_steps_min
+            ].unsqueeze(-1).unsqueeze(-1).expand(V_shape)
+            * torch.eye(
+                self.f_steps, device=DEVICE, dtype=DTYPE
+            ).expand(V_shape)
+        )
+
+        # TODO: fix diagonal problem like above
+        for i in range(1, self.f_steps_min):
+            diagonal_upper = torch.diag(
+                fourier_coeffs[:, self.f_steps_min + i], diagonal=i
+            ).expand(V_shape)
+            diagonal_lower = torch.diag(
+                fourier_coeffs[:, self.f_steps_min - i], diagonal=-i
+            ).expand(V_shape)
+            V += diagonal_lower + diagonal_upper
+
+        V += self.f_vals.expand(V_shape)
         
-        return V
+        return 2*(V - E)
 
     def a(self):
         pass
