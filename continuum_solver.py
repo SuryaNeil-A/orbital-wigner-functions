@@ -954,37 +954,54 @@ class TimeDependentSolver:
         self.f_steps = 2 * self.n_floquet + 1
         self.f_vals = torch.diag(
             torch.linspace(
-                -self.n_floquet * omega, self.n_floquet * omega, self.f_steps
+                -self.n_floquet * omega,
+                self.n_floquet * omega,
+                self.f_steps,
+                device=DEVICE,
+                dtype=DTYPE,
             )
         )
 
-    def delta_squared(self, E: torch.Tensor, omega: torch.Tensor) -> torch.Tensor:
+    def delta_squared(self, E: torch.Tensor) -> torch.Tensor:
         fourier_coeffs = self.V(self.x_vals, self.f_steps_min)
         V_shape = self.x_vals.shape + self.f_vals.shape
         V = torch.zeros(V_shape, device=DEVICE, dtype=DTYPE)
 
-        V += (
-            fourier_coeffs[
-                :, self.f_steps_min
-            ].unsqueeze(-1).unsqueeze(-1).expand(V_shape)
-            * torch.eye(
-                self.f_steps, device=DEVICE, dtype=DTYPE
-            ).expand(V_shape)
-        )
+        V += fourier_coeffs[:, self.f_steps_min].unsqueeze(-1).unsqueeze(
+            -1
+        ).expand(V_shape) * torch.eye(
+            self.f_steps, device=DEVICE, dtype=DTYPE
+        ).expand(V_shape)
 
-        # TODO: fix diagonal problem like above
-        for i in range(1, self.f_steps_min):
-            diagonal_upper = torch.diag(
-                fourier_coeffs[:, self.f_steps_min + i], diagonal=i
+        for j in range(0, self.f_steps_min):
+            i = j + 1
+            diagonal_upper = fourier_coeffs[:, self.f_steps_min + i].unsqueeze(
+                -1
+            ).unsqueeze(-1).expand(V_shape) * torch.diag(
+                torch.ones(self.f_steps - i, device=DEVICE, dtype=DTYPE),
+                diagonal=i,
             ).expand(V_shape)
-            diagonal_lower = torch.diag(
-                fourier_coeffs[:, self.f_steps_min - i], diagonal=-i
+            diagonal_lower = fourier_coeffs[:, self.f_steps_min - i].unsqueeze(
+                -1
+            ).unsqueeze(-1).expand(V_shape) * torch.diag(
+                torch.ones(self.f_steps - i, device=DEVICE, dtype=DTYPE),
+                diagonal=-i,
             ).expand(V_shape)
+            
             V += diagonal_lower + diagonal_upper
 
         V += self.f_vals.expand(V_shape)
-        
-        return 2*(V - E)
+
+        return 2 * (
+            V.expand(E.shape + V.shape)
+            - E.unsqueeze(-1)
+            .unsqueeze(-1)
+            .unsqueeze(-1)
+            .expand(E.shape + V.shape)
+            * torch.eye(self.f_steps, device=DEVICE, dtype=DTYPE).expand(
+                E.shape + V_shape
+            )
+        )
 
     def a(self):
         pass
