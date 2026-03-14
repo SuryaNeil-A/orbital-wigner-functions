@@ -942,14 +942,14 @@ class TimeDependentSolver:
         # throwing out first element corresponding to identity
         self.x_vals = self.x_vals_full[1:]
 
-        max_V = torch.sum(
+        self.max_V = torch.sum(
             torch.abs(
                 torch.max(V(self.x_vals, f_steps_min).real, dim=0).values
             )
         ).item()
         # TODO: is .item() really necessary?
         self.n_floquet = int(
-            np.ceil(np.max([(4 * max_V) // omega, f_steps_min]))
+            np.ceil(np.max([(4 * self.max_V) // omega, f_steps_min]))
         )
         self.f_steps = 2 * self.n_floquet + 1
         self.f_vals = torch.diag(
@@ -987,7 +987,7 @@ class TimeDependentSolver:
                 torch.ones(self.f_steps - i, device=DEVICE, dtype=DTYPE),
                 diagonal=-i,
             ).expand(V_shape)
-            
+
             V += diagonal_lower + diagonal_upper
 
         V += self.f_vals.expand(V_shape)
@@ -1003,20 +1003,155 @@ class TimeDependentSolver:
             )
         )
 
-    def a(self):
-        pass
+    def a(self, E: torch.Tensor) -> torch.Tensor:
+        delta_squared = self.delta_squared(E)
+        identity = torch.eye(self.f_steps, device=DEVICE, dtype=DTYPE).expand(
+            delta_squared.shape
+        )
 
-    def a_exp(self):
-        pass
+        a = torch.zeros(
+            E.shape + self.x_vals.shape + (2 * self.f_steps, 2 * self.f_steps),
+            device=DEVICE,
+            dtype=DTYPE,
+        )
+
+        # NOTE: other terms 0
+        a[..., 0 : self.f_steps, self.f_steps : (2 * self.f_steps)] = identity
+        a[..., self.f_steps : (2 * self.f_steps), 0 : self.f_steps] = (
+            delta_squared
+        )
+
+        return a
+
+    def a_squared(self, E: torch.Tensor) -> torch.Tensor:
+        delta_squared = self.delta_squared(E)
+
+        a_squared = torch.zeros(
+            E.shape + self.x_vals.shape + (2 * self.f_steps, 2 * self.f_steps),
+            device=DEVICE,
+            dtype=DTYPE,
+        )
+
+        # NOTE: other terms 0
+        a_squared[..., 0 : self.f_steps, 0 : self.f_steps] = delta_squared
+        a_squared[
+            ...,
+            self.f_steps : (2 * self.f_steps),
+            self.f_steps : (2 * self.f_steps),
+        ] = delta_squared
+
+        return a_squared
+
+    def lower_tri_a_exp(self, E: torch.Tensor) -> torch.Tensor:
+        delta_squared = self.delta_squared(E)
+        delta_squared_dx = delta_squared * self.dx**2
+        identity = torch.eye(self.f_steps, device=DEVICE, dtype=DTYPE)
+        a = self.a(E)
+
+        # using gershegorin circle thm
+        z_max = (
+            2 * self.f_vals.real.max().item() + self.max_V * self.f_steps_min
+        )
+        # z_max ^n / n! < 10^-32 approx e^-64
+        # w/ stirling approx n ln(z_max) - n ln(n) < -64
+        # divide by n: ln(z_max/n) < -64/n w/ 0 < n < 64
+        # => ln(n/z_max) > 1
+        # => n \approx 3 * z_max
+        n_cutoff = int(np.min((3 * z_max, 64)))
+
+        tri_shape = (n_cutoff, n_cutoff)
+        ones = torch.ones(tri_shape, device=DEVICE, dtype=DTYPE)
+        lower_tri = torch.kron(
+            torch.tril(ones).unsqueeze(0).unsqueeze(0), delta_squared_dx
+        )
+        upper_tri = torch.kron(
+            torch.triu(ones, diagonal=1).unsqueeze(0).unsqueeze(0),
+            identity.expand(delta_squared_dx.shape),
+        )
+
+        even_factors = torch.nan_to_num(
+            torch.diag(1 / (2 * torch.arange(n_cutoff, device=DEVICE))),
+            nan=1,
+            posinf=1,
+            neginf=1,
+        )
+        odd_factors = torch.diag(
+            1 / (2 * torch.arange(n_cutoff, device=DEVICE) + 1)
+        )
+        factors = torch.matmul(even_factors, odd_factors)
+        block_factors = torch.kron(
+            factors.unsqueeze(0).unsqueeze(0),
+            identity.expand(delta_squared_dx.shape),
+        )
+
+        odd_factors_plus_one = 1 / (
+            2 * torch.arange(1, n_cutoff + 1, device=DEVICE) + 1
+        )
+
+        delta_squared_tri = torch.matmul(lower_tri, block_factors) + upper_tri
+
+        delta_squared_blocks = torch.stack(
+            torch.stack(
+                delta_squared_tri.tensor_split(n_cutoff, dim=-2), dim=-3
+            ).tensor_split(n_cutoff, dim=-1),
+            dim=0,
+        )
+
+        delta_squared_collapsed = collapse(delta_squared_blocks)
+        delta_squared_collapsed_odd = (
+            delta_squared_collapsed
+            * odd_factors_plus_one.unsqueeze(-1)
+            .unsqueeze(-1)
+            .expand(delta_squared_collapsed.shape)
+            * self.dx
+        )
+
+        a_exp_even = torch.kron(
+            torch.eye(2, device=DEVICE, dtype=DTYPE).unsqueeze(0).unsqueeze(0),
+            torch.sum(delta_squared_collapsed, dim=-3),
+        )
+        a_exp_odd = torch.kron(
+            torch.eye(2, device=DEVICE, dtype=DTYPE).unsqueeze(0).unsqueeze(0),
+            torch.sum(delta_squared_collapsed_odd, dim=-3),
+        )
+
+        a_exp = a_exp_even + torch.matmul(a, a_exp_odd)
+
+        norm = torch.exp(
+            -torch.sqrt(
+                delta_squared.real.max(dim=-1).values.max(dim=-1).values
+            )
+            * self.dx
+        ).unsqueeze(-1).unsqueeze(-1).expand(a_exp.shape)
+
+        return a_exp * norm, norm
 
     def a_exp_inv(self):
         pass
 
-    def collapse_a_exp(self):
-        pass
+    def collapse_a_exp(self, E: torch.Tensor) -> torch.Tensor:
+        a_exp, norm = self.lower_tri_a_exp(E)
+        a_exp = a_exp.movedim(0, 1)
+        norm = norm.movedim(0, 1)
 
-    def loss(self):
-        pass
+        return collapse(a_exp) / collapse(norm)
+
+    def loss(self, E: torch.Tensor, k: torch.Tensor) -> torch.Tensor:
+        a_exp_collapsed = self.collapse_a_exp(E)
+        identity = torch.eye(2 * self.f_steps, device=DEVICE, dtype=DTYPE)
+
+        monodromy_matrix = (
+            a_exp_collapsed.unsqueeze(0).expand(
+                k.shape + a_exp_collapsed.shape
+            )
+            - torch.exp(1j * k) * identity.expand(
+                k.shape + a_exp_collapsed.shape
+            )
+        )
+
+        loss = torch.min(torch.linalg.svdvals(monodromy_matrix), dim=-1).values
+
+        return loss
 
     def plot_loss(self):
         pass
