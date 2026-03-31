@@ -1125,20 +1125,50 @@ class TimeDependentSolver:
         ).unsqueeze(-1).unsqueeze(-1).expand(a_exp.shape)
 
         return a_exp * norm, norm
+    
+    def matrix_a_exp(self, E: torch.Tensor) -> torch.Tensor:
+        a = self.a(E)
+        a_exp = torch.linalg.matrix_exp(a)
+        delta_squared = self.delta_squared(E)
+
+        norm = torch.exp(
+            -torch.sqrt(
+                delta_squared.real.max(dim=-1).values.max(dim=-1).values
+            )
+            * self.dx
+        ).unsqueeze(-1).unsqueeze(-1).expand(a_exp.shape)
+
+        return a_exp * norm, norm
 
     def a_exp_inv(self):
         pass
 
-    def collapse_a_exp(self, E: torch.Tensor) -> torch.Tensor:
-        a_exp, norm = self.lower_tri_a_exp(E)
+    def collapse_a_exp(
+        self,
+        E: torch.Tensor,
+        exp_method: str = "lower_tri"
+    ) -> torch.Tensor:
+        match exp_method:
+            case "lower_tri":
+                a_exp, norm = self.lower_tri_a_exp(E)
+            case "matrix_exp":
+                a_exp, norm = self.matrix_a_exp(E)
+            case _:
+                raise ValueError("Method must be one of 'lower_tri' or 'matrix_exp'")
         a_exp = a_exp.movedim(0, 1)
         norm = norm.movedim(0, 1)
 
         return collapse(a_exp) / collapse(norm)
 
-    def loss(self, E: torch.Tensor, k: torch.Tensor) -> torch.Tensor:
-        a_exp_collapsed = self.collapse_a_exp(E)
+    def loss(
+        self,
+        E: torch.Tensor,
+        k: torch.Tensor,
+        exp_method: str = "lower_tri"
+    ) -> torch.Tensor:
+        a_exp_collapsed = self.collapse_a_exp(E, exp_method)
         identity = torch.eye(2 * self.f_steps, device=DEVICE, dtype=DTYPE)
+        k = clean_input(k)
 
         monodromy_matrix = (
             a_exp_collapsed.unsqueeze(0).expand(
@@ -1151,7 +1181,52 @@ class TimeDependentSolver:
 
         loss = torch.min(torch.linalg.svdvals(monodromy_matrix), dim=-1).values
 
-        return loss
+        return loss.squeeze()
 
-    def plot_loss(self):
-        pass
+    def plot_loss(
+        self,
+        E: torch.Tensor,
+        k: torch.Tensor | NDArray | float | int,
+        exp_method: str = "lower_tri",
+        x_min: float | None = None,
+        x_max: float | None = None,
+        y_min: float | None = None,
+        y_max: float | None = None,
+        log_scale: bool = False,
+    ) -> None:
+        """Plots the loss function given energies and k values.
+
+        Arguments:
+            k (Tensor, NDArray, float, int): Tensor/array of k values, or a single number.
+            E (Tensor): Tensor of energies.
+            x_min (float, None): Minimum x value for the plot.
+            x_max (float, None): Maximum x value for the plot.
+            y_min (float, None): Minimum y value for the plot.
+            y_max (float, None): Maximum y value for the plot.
+            log_scale (bool): Whether to plot y on a log scale.
+        """
+        k = clean_input(k)
+        E_cpu = E.cpu()
+
+        fig, ax = plt.subplots(figsize=(10, 8))
+
+        for i in range(len(k)):
+            # not doing k's in parallel for memory savings
+            # surely nobody will plot 1024 k curves anyways, right?
+            loss = self.loss(E, k[i].item(), exp_method).cpu()
+            ax.plot(E_cpu, loss, label=f"k = {k[i].item():.2f} Loss")
+
+        ax.legend()
+        ax.grid()
+        ax.set_title("Losses vs. Energy Plot")
+
+        ax.set_xlabel("Energy")
+        ax.set_ylabel("Loss")
+
+        ax.set_xlim(xmin=x_min, xmax=x_max)
+        ax.set_ylim(ymin=y_min, ymax=y_max)
+
+        if log_scale:
+            ax.set_yscale("log")
+
+        plt.show()
