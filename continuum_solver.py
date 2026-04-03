@@ -340,28 +340,21 @@ class ContinuumSolver:
 
         # using analytical formula to construct matrix exponential of A
         # when x->0 in sinh(ax)/x the limit evaluates to a, so wrapping sinh(delta * dx)/ delta in nan_to_num
+        sinh_term = torch.sinh(delta * self.dx) / delta
+        # real and imaginary parts need to be handled separately
+        sinh_term_fixed = torch.nan_to_num(
+            sinh_term.real, nan=self.dx
+        ) + torch.nan_to_num(sinh_term.imag, nan=0)
+
         a_exp[..., 0, 0] = torch.cosh(delta * self.dx) + (
-            1j
-            * k_expanded
-            * torch.nan_to_num(
-                torch.sinh(delta * self.dx) / delta, nan=self.dx
-            )
+            1j * k_expanded * sinh_term_fixed
         )
-        a_exp[..., 0, 1] = torch.nan_to_num(
-            torch.sinh(delta * self.dx) / delta, nan=self.dx
-        )
+        a_exp[..., 0, 1] = sinh_term_fixed
         a_exp[..., 1, 0] = delta * torch.sinh(delta * self.dx) + (
-            (k_expanded**2)
-            * torch.nan_to_num(
-                torch.sinh(delta * self.dx) / delta, nan=self.dx
-            )
+            (k_expanded**2) * sinh_term_fixed
         )
         a_exp[..., 1, 1] = torch.cosh(delta * self.dx) + (
-            -1j
-            * k_expanded
-            * torch.nan_to_num(
-                torch.sinh(delta * self.dx) / delta, nan=self.dx
-            )
+            -1j * k_expanded * sinh_term_fixed
         )
 
         # normalzing a_exp by multiplying by e^-delta
@@ -490,7 +483,7 @@ class ContinuumSolver:
 
         return (
             loss.unsqueeze(0).expand(k.shape + E.shape)
-            - (2 * torch.cos(k)).unsqueeze(-1).expand(k.shape + E.shape)
+            #- (2 * torch.cos(k)).unsqueeze(-1).expand(k.shape + E.shape)
         ).squeeze()
 
     def im_loss(self, k, E):
@@ -906,6 +899,16 @@ class ContinuumSolver:
         # plt.show()
 
 
+def matrix_exp(matrix, dx, n_cutoff):
+    matrix_exp = torch.zeros_like(matrix, device=DEVICE, dtype=DTYPE)
+    for i in range(n_cutoff):
+        matrix_exp += (1 / torch.exp(torch.lgamma(clean_input(i) + 1))) * (
+            torch.linalg.matrix_power(matrix * dx, i)
+        )
+
+    return matrix_exp
+
+
 class TimeDependentSolver:
     """Class to solve for the eigenvalues and eigenfunctions of a 1-D time-dependent periodic system.
 
@@ -924,12 +927,13 @@ class TimeDependentSolver:
     ):
         """Initialize the class.
 
-        Arguments:
-            V (Callable): Tensor of fourier-coefficents.
-            x_min (float): X value of the left-hand side of one period.
-            x_min (float): X value of the right-hand side of one period.
-            x_steps (int): Number of steps to take up to and including x_max (but not x_min).
-            omega (float): Frequency spacing.
+        Args:
+            V (Callable[[torch.Tensor, int], torch.Tensor]): Function for the potential given as fourier coefficeints (TODO: consider better description here).
+            x_min (float, optional): Minimum x value for one period. Defaults to 0.0.
+            x_max (float, optional): Maximum x value for one period. Defaults to 1.0.
+            x_steps (int, optional): Number of x steps between x_min and x_max (excluding x_min). Defaults to 1024.
+            f_steps_min (int, optional): Minimum number of frequency steps. Defaults to 1.
+            omega (float, optional): Frequency spacing between steps. Defaults to 1.0.
         """
         self.V = V
         self.f_steps_min = f_steps_min
@@ -949,7 +953,7 @@ class TimeDependentSolver:
         ).item()
         # TODO: is .item() really necessary?
         self.n_floquet = int(
-            np.ceil(np.max([(4 * self.max_V) // omega, f_steps_min]))
+            np.ceil(np.min([(4 * self.max_V) // omega, f_steps_min]))
         )
         self.f_steps = 2 * self.n_floquet + 1
         self.f_vals = torch.diag(
@@ -963,6 +967,14 @@ class TimeDependentSolver:
         )
 
     def delta_squared(self, E: torch.Tensor) -> torch.Tensor:
+        """Generates the delta-squared object.
+
+        Args:
+            E (torch.Tensor): Tensor of energies to compute delta-squared.
+
+        Returns:
+            delta_squared: Delta-squared object as given in write-up (TODO).
+        """
         fourier_coeffs = self.V(self.x_vals, self.f_steps_min)
         V_shape = self.x_vals.shape + self.f_vals.shape
         V = torch.zeros(V_shape, device=DEVICE, dtype=DTYPE)
@@ -1057,7 +1069,8 @@ class TimeDependentSolver:
         # divide by n: ln(z_max/n) < -64/n w/ 0 < n < 64
         # => ln(n/z_max) > 1
         # => n \approx 3 * z_max
-        n_cutoff = int(np.min((3 * z_max, 64)))
+        # n_cutoff = int(np.min((3 * z_max, 64)))
+        n_cutoff = 4
 
         tri_shape = (n_cutoff, n_cutoff)
         ones = torch.ones(tri_shape, device=DEVICE, dtype=DTYPE)
@@ -1117,36 +1130,46 @@ class TimeDependentSolver:
 
         a_exp = a_exp_even + torch.matmul(a, a_exp_odd)
 
-        norm = torch.exp(
-            -torch.sqrt(
-                delta_squared.real.max(dim=-1).values.max(dim=-1).values
+        norm = (
+            torch.exp(
+                -torch.sqrt(
+                    delta_squared.real.max(dim=-1).values.max(dim=-1).values
+                )
+                * self.dx
             )
-            * self.dx
-        ).unsqueeze(-1).unsqueeze(-1).expand(a_exp.shape)
+            .unsqueeze(-1)
+            .unsqueeze(-1)
+            .expand(a_exp.shape)
+        )
 
-        return a_exp * norm, norm
-    
+        return a_exp, norm
+
     def matrix_a_exp(self, E: torch.Tensor) -> torch.Tensor:
         a = self.a(E)
-        a_exp = torch.linalg.matrix_exp(a)
+        a_exp = torch.linalg.matrix_exp(a * self.dx)
         delta_squared = self.delta_squared(E)
 
-        norm = torch.exp(
-            -torch.sqrt(
-                delta_squared.real.max(dim=-1).values.max(dim=-1).values
+        norm = (
+            torch.exp(
+                -torch.sqrt(
+                    delta_squared.real.max(dim=-1)
+                    .values.max(dim=-1)
+                    .values.to(DTYPE)
+                )
+                * self.dx
             )
-            * self.dx
-        ).unsqueeze(-1).unsqueeze(-1).expand(a_exp.shape)
+            .unsqueeze(-1)
+            .unsqueeze(-1)
+            .expand(a_exp.shape)
+        )
 
-        return a_exp * norm, norm
+        return a_exp, norm
 
     def a_exp_inv(self):
         pass
 
     def collapse_a_exp(
-        self,
-        E: torch.Tensor,
-        exp_method: str = "lower_tri"
+        self, E: torch.Tensor, exp_method: str = "matrix_exp"
     ) -> torch.Tensor:
         match exp_method:
             case "lower_tri":
@@ -1154,32 +1177,30 @@ class TimeDependentSolver:
             case "matrix_exp":
                 a_exp, norm = self.matrix_a_exp(E)
             case _:
-                raise ValueError("Method must be one of 'lower_tri' or 'matrix_exp'")
+                raise ValueError(
+                    "Method must be one of 'lower_tri' or 'matrix_exp'"
+                )
         a_exp = a_exp.movedim(0, 1)
         norm = norm.movedim(0, 1)
 
-        return collapse(a_exp) / collapse(norm)
+        return collapse(a_exp) #/ collapse(norm)
 
     def loss(
-        self,
-        E: torch.Tensor,
-        k: torch.Tensor,
-        exp_method: str = "lower_tri"
+        self, E: torch.Tensor, k: torch.Tensor, exp_method: str = "matrix_exp"
     ) -> torch.Tensor:
         a_exp_collapsed = self.collapse_a_exp(E, exp_method)
         identity = torch.eye(2 * self.f_steps, device=DEVICE, dtype=DTYPE)
         k = clean_input(k)
 
-        monodromy_matrix = (
-            a_exp_collapsed.unsqueeze(0).expand(
-                k.shape + a_exp_collapsed.shape
-            )
-            - torch.exp(1j * k) * identity.expand(
-                k.shape + a_exp_collapsed.shape
-            )
-        )
+        monodromy_matrix = a_exp_collapsed.unsqueeze(0).expand(
+            k.shape + a_exp_collapsed.shape
+        )# - torch.exp(1j * k) * identity.expand(
+        #     k.shape + a_exp_collapsed.shape
+        # )
 
-        loss = torch.min(torch.linalg.svdvals(monodromy_matrix), dim=-1).values
+        # loss = torch.min(torch.linalg.svdvals(monodromy_matrix), dim=-1).values
+        matrix = 0.5 * (monodromy_matrix + torch.linalg.inv(monodromy_matrix))
+        loss = trace_2by2(matrix)
 
         return loss.squeeze()
 
@@ -1187,7 +1208,7 @@ class TimeDependentSolver:
         self,
         E: torch.Tensor,
         k: torch.Tensor | NDArray | float | int,
-        exp_method: str = "lower_tri",
+        exp_method: str = "matrix_exp",
         x_min: float | None = None,
         x_max: float | None = None,
         y_min: float | None = None,
