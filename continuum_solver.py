@@ -953,7 +953,7 @@ class TimeDependentSolver:
         ).item()
         # TODO: is .item() really necessary?
         self.n_floquet = int(
-            np.ceil(np.min([(4 * self.max_V) // omega, f_steps_min]))
+            np.ceil(np.max([(4 * self.max_V) // omega, f_steps_min]))
         )
         self.f_steps = 2 * self.n_floquet + 1
         self.f_vals = torch.diag(
@@ -1199,10 +1199,17 @@ class TimeDependentSolver:
         # )
 
         # loss = torch.min(torch.linalg.svdvals(monodromy_matrix), dim=-1).values
-        matrix = 0.5 * (monodromy_matrix + torch.linalg.inv(monodromy_matrix))
-        loss = trace_2by2(matrix)
+        evals, evects = torch.linalg.eig(monodromy_matrix)
+        evects = evects.squeeze()
+        loss = evals + 1 / evals
 
-        return loss.squeeze()
+        dc_overlap = (
+            torch.abs(
+                evects[:, [self.n_floquet, self.n_floquet + self.f_steps], :]
+            ) ** 2
+        ).sum(-2).squeeze()
+
+        return loss.squeeze(), dc_overlap
 
     def plot_loss(
         self,
