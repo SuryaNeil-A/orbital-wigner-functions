@@ -1,10 +1,14 @@
 import torch
+from torch import Tensor
 from collections.abc import Callable
 import matplotlib.pyplot as plt
 import numpy as np
 from numpy import float64, ndarray
 from numpy.typing import NDArray
 import scipy as sp
+# TODO: figure out why this isn't working
+# import helpers
+# from helpers import sign_change, trace_2by2, inverse_2by2, collapse, clean_input
 
 # necessary for linear algebra
 torch.backends.cuda.preferred_linalg_library("magma")
@@ -19,7 +23,7 @@ DEVICE = (
 DTYPE = torch.complex128
 
 
-def sign_change(matrices: torch.Tensor) -> torch.Tensor:
+def sign_change(matrices: Tensor) -> Tensor:
     """Computes indices of a tensor where the sign changes.
 
     Leading dimensions are treated as batch dimensions.
@@ -38,7 +42,7 @@ def sign_change(matrices: torch.Tensor) -> torch.Tensor:
     return change_index
 
 
-def trace_2by2(matrices: torch.Tensor) -> torch.Tensor:
+def trace_2by2(matrices: Tensor) -> Tensor:
     """Computes the batched trace of a 2x2 matrix.
 
     Leading dimensions are treated as batch dimensions.
@@ -55,7 +59,7 @@ def trace_2by2(matrices: torch.Tensor) -> torch.Tensor:
     return matrices[..., 0, 0] + matrices[..., 1, 1]
 
 
-def inverse_2by2(matrices: torch.Tensor) -> torch.Tensor:
+def inverse_2by2(matrices: Tensor) -> Tensor:
     """Computes the batched inverse of a 2x2 matrix.
 
     Leading dimensions are treated as batch dimensions.
@@ -83,7 +87,7 @@ def inverse_2by2(matrices: torch.Tensor) -> torch.Tensor:
     return inverse
 
 
-def collapse(matrices: torch.Tensor) -> torch.Tensor:
+def collapse(matrices: Tensor) -> Tensor:
     """Collapses the first dimension of a tensor by matrix multiplying pairwise.
 
     Following the behavior of torch.matmul, all but the first and (possibly) last two dimensions are treated as batch dimensions.
@@ -115,7 +119,7 @@ def collapse(matrices: torch.Tensor) -> torch.Tensor:
     return matrices.squeeze(0)
 
 
-def clean_input(input: torch.Tensor | NDArray | float | int) -> torch.Tensor:
+def clean_input(input: Tensor | NDArray | float | int) -> Tensor:
     """Cleans up input value for processing by the solver.
 
     Example: If input is a float, converts it to a tensor.
@@ -132,7 +136,7 @@ def clean_input(input: torch.Tensor | NDArray | float | int) -> torch.Tensor:
             input = torch.tensor([input], device=DEVICE)
         case ndarray():
             input = torch.from_numpy(input).to(device=DEVICE)
-        case torch.Tensor():
+        case Tensor():
             if input.shape == torch.Size([]):
                 input = input.unsqueeze(0)
         case _:
@@ -144,7 +148,7 @@ def clean_input(input: torch.Tensor | NDArray | float | int) -> torch.Tensor:
 
 
 def false_position(
-    func: Callable[[torch.Tensor], torch.Tensor],
+    func: Callable[[Tensor], Tensor],
     x_min: float,
     x_max: float,
     tol: float = 1e-6,
@@ -222,7 +226,7 @@ class ContinuumSolver:
 
     def __init__(
         self,
-        V: Callable[[torch.Tensor], torch.Tensor],
+        V: Callable[[Tensor], Tensor],
         x_min: float = 0.0,
         x_max: float = 1,
         x_steps: int = 1024,
@@ -246,7 +250,7 @@ class ContinuumSolver:
         # throwing out first element corresponding to identity
         self.x_vals = self.x_vals_full[1:]
 
-    def a(self, k: torch.Tensor, E: torch.Tensor) -> torch.Tensor:
+    def a(self, k: Tensor, E: Tensor) -> Tensor:
         """Constructs the A matrix.
 
         Arguments:
@@ -290,7 +294,7 @@ class ContinuumSolver:
         # moving dimensions so output is (x, k, E, 2, 2) to make leading dimensions batch dimensions
         return a
 
-    def delta(self, k: torch.Tensor, E: torch.Tensor) -> torch.Tensor:
+    def delta(self, k: Tensor, E: Tensor) -> Tensor:
         """Creates the delta quantity which is $\sqrt(2(V - E))$.
 
         Arguments:
@@ -316,7 +320,7 @@ class ContinuumSolver:
 
         return torch.sqrt(2 * (V_expanded - E_expanded))
 
-    def a_exp(self, k: torch.Tensor, E: torch.Tensor) -> torch.Tensor:
+    def a_exp(self, k: Tensor, E: Tensor) -> Tensor:
         """Constructs the matrix exponential of A using the analytical formula.
 
         Arguments:
@@ -366,7 +370,7 @@ class ContinuumSolver:
         )
         return a_exp * norm
 
-    def a_exp_inv(self, k: torch.Tensor, E: torch.Tensor) -> torch.Tensor:
+    def a_exp_inv(self, k: Tensor, E: Tensor) -> Tensor:
         """Constructs the inverse of the matrix exponential of A using the known inverse fomrula.
 
         Instead of computing a_exp first and inverting, this inverts first and then computes a_exp_inv directly.
@@ -435,7 +439,7 @@ class ContinuumSolver:
         """TODO"""
         pass
 
-    def collapse_a_exp(self, k: torch.Tensor, E: torch.Tensor) -> torch.Tensor:
+    def collapse_a_exp(self, k: Tensor, E: Tensor) -> Tensor:
         """Collapse the x steps on the a_exp matrices into one single matrix.
 
         Arguments:
@@ -457,9 +461,9 @@ class ContinuumSolver:
 
     def loss(
         self,
-        k: torch.Tensor | NDArray | float | int,
-        E: torch.Tensor | NDArray | float | int,
-    ) -> torch.Tensor:
+        k: Tensor | NDArray | float | int,
+        E: Tensor | NDArray | float | int,
+    ) -> Tensor:
         """Compputes the loss function for the system given k and E values.
 
         Arguments:
@@ -483,7 +487,7 @@ class ContinuumSolver:
 
         return (
             loss.unsqueeze(0).expand(k.shape + E.shape)
-            #- (2 * torch.cos(k)).unsqueeze(-1).expand(k.shape + E.shape)
+            # - (2 * torch.cos(k)).unsqueeze(-1).expand(k.shape + E.shape)
         ).squeeze()
 
     def im_loss(self, k, E):
@@ -500,13 +504,13 @@ class ContinuumSolver:
 
     def solve_eigenvals(
         self,
-        k: torch.Tensor | NDArray | float | int,
+        k: Tensor | NDArray | float | int,
         E_min: float = 0,
         E_max: float = 10,
         E_tol: float = 1e-6,
         E_steps: int = 1024,
         save_eigenvals: bool = True,
-    ) -> torch.Tensor:
+    ) -> Tensor:
         """Finds the eigenvalues for the given system using the false-point method.
 
         Arguments:
@@ -530,9 +534,7 @@ class ContinuumSolver:
 
         return eigenvals
 
-    def transfer_matrix(
-        self, k: torch.Tensor, E: torch.Tensor
-    ) -> torch.Tensor:
+    def transfer_matrix(self, k: Tensor, E: Tensor) -> Tensor:
         """Constructs the transfer matrix using the analytical formula.
 
         Arguments:
@@ -575,9 +577,9 @@ class ContinuumSolver:
 
     def solve_eigenstate_matrix(
         self,
-        E: torch.Tensor | NDArray | float | int,
+        E: Tensor | NDArray | float | int,
         initial_condit: str = "symmetric",
-    ) -> torch.Tensor:
+    ) -> Tensor:
         """Computes the eigenstate for the system given k and E values.
 
         Arguments:
@@ -757,8 +759,8 @@ class ContinuumSolver:
 
     def plot_loss(
         self,
-        k: torch.Tensor | NDArray | float | int,
-        E: torch.Tensor,
+        k: Tensor | NDArray | float | int,
+        E: Tensor,
         x_min: float | None = None,
         x_max: float | None = None,
         y_min: float | None = None,
@@ -807,7 +809,7 @@ class ContinuumSolver:
 
     def plot_eigenstate(
         self,
-        k: torch.Tensor | NDArray | float | int,
+        k: Tensor | NDArray | float | int,
         E: float | int,
         solution_type: str = "auto",
         energy_guess: float | int = 0.51,
@@ -918,7 +920,7 @@ class TimeDependentSolver:
 
     def __init__(
         self,
-        V: Callable[[torch.Tensor, int], torch.Tensor],
+        V: Callable[[Tensor, int], Tensor],
         x_min: float = 0.0,
         x_max: float = 1.0,
         x_steps: int = 1024,
@@ -928,7 +930,7 @@ class TimeDependentSolver:
         """Initialize the class.
 
         Args:
-            V (Callable[[torch.Tensor, int], torch.Tensor]): Function for the potential given as fourier coefficeints (TODO: consider better description here).
+            V (Callable[[Tensor, int], Tensor]): Function for the potential given as fourier coefficeints (TODO: consider better description here).
             x_min (float, optional): Minimum x value for one period. Defaults to 0.0.
             x_max (float, optional): Maximum x value for one period. Defaults to 1.0.
             x_steps (int, optional): Number of x steps between x_min and x_max (excluding x_min). Defaults to 1024.
@@ -966,11 +968,11 @@ class TimeDependentSolver:
             )
         )
 
-    def delta_squared(self, E: torch.Tensor) -> torch.Tensor:
+    def delta_squared(self, E: Tensor) -> Tensor:
         """Generates the delta-squared object.
 
         Args:
-            E (torch.Tensor): Tensor of energies to compute delta-squared.
+            E (Tensor): Tensor of energies to compute delta-squared.
 
         Returns:
             delta_squared: Delta-squared object as given in write-up (TODO).
@@ -1015,7 +1017,7 @@ class TimeDependentSolver:
             )
         )
 
-    def a(self, E: torch.Tensor) -> torch.Tensor:
+    def a(self, E: Tensor) -> Tensor:
         delta_squared = self.delta_squared(E)
         identity = torch.eye(self.f_steps, device=DEVICE, dtype=DTYPE).expand(
             delta_squared.shape
@@ -1035,7 +1037,7 @@ class TimeDependentSolver:
 
         return a
 
-    def a_squared(self, E: torch.Tensor) -> torch.Tensor:
+    def a_squared(self, E: Tensor) -> Tensor:
         delta_squared = self.delta_squared(E)
 
         a_squared = torch.zeros(
@@ -1054,7 +1056,7 @@ class TimeDependentSolver:
 
         return a_squared
 
-    def lower_tri_a_exp(self, E: torch.Tensor) -> torch.Tensor:
+    def lower_tri_a_exp(self, E: Tensor) -> Tensor:
         delta_squared = self.delta_squared(E)
         delta_squared_dx = delta_squared * self.dx**2
         identity = torch.eye(self.f_steps, device=DEVICE, dtype=DTYPE)
@@ -1144,7 +1146,7 @@ class TimeDependentSolver:
 
         return a_exp, norm
 
-    def matrix_a_exp(self, E: torch.Tensor) -> torch.Tensor:
+    def matrix_a_exp(self, E: Tensor) -> Tensor:
         a = self.a(E)
         a_exp = torch.linalg.matrix_exp(a * self.dx)
         delta_squared = self.delta_squared(E)
@@ -1169,8 +1171,8 @@ class TimeDependentSolver:
         pass
 
     def collapse_a_exp(
-        self, E: torch.Tensor, exp_method: str = "matrix_exp"
-    ) -> torch.Tensor:
+        self, E: Tensor, exp_method: str = "matrix_exp"
+    ) -> Tensor:
         match exp_method:
             case "lower_tri":
                 a_exp, norm = self.lower_tri_a_exp(E)
@@ -1183,18 +1185,18 @@ class TimeDependentSolver:
         a_exp = a_exp.movedim(0, 1)
         norm = norm.movedim(0, 1)
 
-        return collapse(a_exp) #/ collapse(norm)
+        return collapse(a_exp)  # / collapse(norm)
 
     def loss(
-        self, E: torch.Tensor, k: torch.Tensor, exp_method: str = "matrix_exp"
-    ) -> torch.Tensor:
+        self, E: Tensor, k: Tensor, exp_method: str = "matrix_exp"
+    ) -> Tensor:
         a_exp_collapsed = self.collapse_a_exp(E, exp_method)
         identity = torch.eye(2 * self.f_steps, device=DEVICE, dtype=DTYPE)
         k = clean_input(k)
 
         monodromy_matrix = a_exp_collapsed.unsqueeze(0).expand(
             k.shape + a_exp_collapsed.shape
-        )# - torch.exp(1j * k) * identity.expand(
+        )  # - torch.exp(1j * k) * identity.expand(
         #     k.shape + a_exp_collapsed.shape
         # )
 
@@ -1204,17 +1206,24 @@ class TimeDependentSolver:
         loss = evals + 1 / evals
 
         dc_overlap = (
-            torch.abs(
-                evects[:, [self.n_floquet, self.n_floquet + self.f_steps], :]
-            ) ** 2
-        ).sum(-2).squeeze()
+            (
+                torch.abs(
+                    evects[
+                        :, [self.n_floquet, self.n_floquet + self.f_steps], :
+                    ]
+                )
+                ** 2
+            )
+            .sum(-2)
+            .squeeze()
+        )
 
         return loss.squeeze(), dc_overlap
 
     def plot_loss(
         self,
-        E: torch.Tensor,
-        k: torch.Tensor | NDArray | float | int,
+        E: Tensor,
+        k: Tensor | NDArray | float | int,
         exp_method: str = "matrix_exp",
         x_min: float | None = None,
         x_max: float | None = None,
