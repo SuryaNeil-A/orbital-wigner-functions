@@ -7,9 +7,7 @@ from numpy import float64, ndarray
 from numpy.typing import NDArray
 import scipy as sp
 # TODO: figure out why this isn't working
-# import helpers
-# from helpers import sign_change, trace_2by2, inverse_2by2, collapse, clean_input
-
+# from helpers import sign_change
 # necessary for linear algebra
 torch.backends.cuda.preferred_linalg_library("magma")
 DEVICE = (
