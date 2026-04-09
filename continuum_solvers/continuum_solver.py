@@ -9,7 +9,7 @@ import scipy as sp
 # TODO: figure out why this isn't working
 # from helpers import sign_change
 # necessary for linear algebra
-torch.backends.cuda.preferred_linalg_library("magma")
+# torch.backends.cuda.preferred_linalg_library("magma")
 DEVICE = (
     "cuda"
     if torch.cuda.is_available()

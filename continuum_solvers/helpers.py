@@ -4,7 +4,7 @@ from numpy import float64, ndarray
 from numpy.typing import NDArray
 
 # necessary for linear algebra
-torch.backends.cuda.preferred_linalg_library("magma")
+# torch.backends.cuda.preferred_linalg_library("magma")
 DEVICE = (
     "cuda"
     if torch.cuda.is_available()
