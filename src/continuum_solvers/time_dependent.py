@@ -4,21 +4,14 @@ from collections.abc import Callable
 import matplotlib.pyplot as plt
 import numpy as np
 from numpy.typing import NDArray
-from helpers import collapse, clean_input
+from continuum_solvers.helpers import collapse, clean_input
+from continuum_solvers.__init__ import DEVICE, DTYPE
 
 # necessary for linear algebra
 # torch.backends.cuda.preferred_linalg_library("magma")
-DEVICE = (
-    "cuda"
-    if torch.cuda.is_available()
-    else "mps"
-    if torch.backends.mps.is_available()
-    else "cpu"
-)
-# set default datatype of tensors
-DTYPE = torch.complex128
 
-class TimeDependentSolver:
+
+class TimeDepSolver:
     """Class to solve for the eigenvalues and eigenfunctions of a 1-D time-dependent periodic system.
 
     Attributes:
