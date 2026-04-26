@@ -2,18 +2,10 @@ import torch
 from torch import Tensor
 from numpy import float64, ndarray
 from numpy.typing import NDArray
+from . import DEVICE
 
 # necessary for linear algebra
 # torch.backends.cuda.preferred_linalg_library("magma")
-DEVICE = (
-    "cuda"
-    if torch.cuda.is_available()
-    else "mps"
-    if torch.backends.mps.is_available()
-    else "cpu"
-)
-# set default datatype of tensors
-DTYPE = torch.complex128
 
 
 def sign_change(matrices: Tensor) -> Tensor:
