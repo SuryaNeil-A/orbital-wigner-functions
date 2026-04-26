@@ -4,8 +4,8 @@ from collections.abc import Callable
 import matplotlib.pyplot as plt
 import numpy as np
 from numpy.typing import NDArray
-from helpers import collapse, clean_input
-from . import DEVICE, DTYPE
+from continuum_solvers.helpers import collapse, clean_input
+from continuum_solvers.__init__ import DEVICE, DTYPE
 
 # necessary for linear algebra
 # torch.backends.cuda.preferred_linalg_library("magma")

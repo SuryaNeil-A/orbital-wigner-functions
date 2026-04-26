@@ -5,8 +5,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 from numpy.typing import NDArray
 import scipy as sp
-from . import DEVICE, DTYPE
-from helpers import sign_change, clean_input, collapse, trace_2by2
+from continuum_solvers.__init__ import DEVICE, DTYPE
+from continuum_solvers.helpers import (
+    sign_change,
+    clean_input,
+    collapse,
+    trace_2by2,
+)
 
 # necessary for linear algebra
 # torch.backends.cuda.preferred_linalg_library("magma")
