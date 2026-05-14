@@ -5,8 +5,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from numpy.typing import NDArray
 import scipy as sp
-from continuum_solvers.__init__ import DEVICE, DTYPE
-from continuum_solvers.helpers import (
+from solvers.__init__ import DEVICE
+from solvers.continuum.__init__ import DTYPE
+from solvers.continuum.helpers import (
     sign_change,
     clean_input,
     collapse,
