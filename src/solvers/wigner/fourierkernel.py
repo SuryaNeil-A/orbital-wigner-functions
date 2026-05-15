@@ -404,3 +404,166 @@ class State:
             return rho_beta_p
         else:
             pass
+
+
+class FourierSolver:
+    def __init__(
+        self, params, t, t_params, size, k_size, batch_total, model, hop_params
+    ):
+        self.params = params
+        self.t_params = t_params
+        self.t = t
+        self.system_size = size
+        self.k_size = k_size
+        self.model = model
+        self.batch_total = batch_total
+        # defining number of k points per batch in x direction
+        self.k_pts_perbatch = (2 * k_size[0]) // (3 * batch_total[0])
+        # initializing U and H_0
+        self.U = BlochOperators(
+            self.model, hop_params, self.t, self.t_params, self.k_size
+        ).collapse_U()
+        self.H_0 = (
+            BlochOperators(
+                self.model,
+                hop_params,
+                torch.tensor([0]),
+                self.t_params,
+                self.k_size,
+            )
+            .construct_H()
+            .squeeze(0)
+        )
+        self.unit_cell = self.H_0.shape[-1]
+
+    def timeEvolve(self, batch_index):
+        if len(self.k_size) == 1:
+            # taking the FT of slice of H_0 according to k batching
+            batch_state_0 = State(
+                self.params,
+                self.system_size,
+                self.H_0[
+                    (
+                        ((self.system_size[0]) // 2)
+                        + self.k_pts_perbatch * batch_index
+                    ) : (
+                        (self.system_size[0] // 2)
+                        + self.k_pts_perbatch * (batch_index + 1)
+                    )
+                ],
+            ).stateFT()
+            # creating initital batch state and expanding into dims [time_steps, system_size (p), system_size (k), unit_cell, unit_cell]
+            batch_state = batch_state_0.unsqueeze(0).expand(
+                [self.U.shape[0]] + list(batch_state_0.shape)
+            )
+            batch_state_out = torch.empty(
+                batch_state.shape, dtype=DTYPE, device=DEVICE
+            )
+
+            # creating the unitaries to act on the batched state by taking slices of U
+            batch_U = torch.empty(
+                batch_state.shape, dtype=DTYPE, device=DEVICE
+            )
+            for i in range(self.k_pts_perbatch):
+                batch_U[:, :, i, :, :] = self.U[
+                    :,
+                    (i + self.k_pts_perbatch * batch_index) : (
+                        i
+                        + self.system_size[0]
+                        + self.k_pts_perbatch * batch_index
+                    ),
+                    :,
+                    :,
+                ]
+
+            # computing adjoint and flipping p to -p for inverse
+            batch_U_inv = torch.flip(batch_U.adjoint(), dims=[1])
+
+            # multiplying unitaries for time evolution
+            batch_state_out = torch.matmul(
+                torch.matmul(batch_U, batch_state), batch_U_inv
+            )
+
+            # appending initial state to batch_state
+            batch_state_out = torch.cat(
+                (batch_state_0.unsqueeze(0), batch_state_out), dim=0
+            )
+
+            # output state has dims [time_steps + 1, system_size, system_size, unit_cell, unit_cell]
+            return batch_state_out
+        else:
+            pass
+
+    def stateIFT(self, matrices):
+        # inverse fourier transform back to position space of time-evolved state
+        if len(self.k_size) == 1:
+            # create position grid
+            x_values = torch.arange(self.system_size[0], device=DEVICE)
+            p_values_x = torch.linspace(
+                -torch.pi, torch.pi, self.system_size[0], device=DEVICE
+            )
+
+            # compute the IFT matrix with phase adjustment
+            # F has dims [time_steps + 1, system_size, system_size]
+            F = (
+                (
+                    torch.exp(1j * torch.outer(p_values_x, x_values))
+                    / self.system_size[0]
+                )
+                .unsqueeze(0)
+                .expand(
+                    self.t_params["time_steps"] + 1,
+                    self.system_size[0],
+                    self.system_size[0],
+                )
+            )
+
+            # reshape rho_beta for matrix mult
+            N = self.unit_cell**2
+            matrices_reshaped = matrices.view(
+                self.t_params["time_steps"] + 1, self.system_size[0], N
+            )
+
+            # perform IFT by matrix mult
+            # rho_Out has dims [time_steps + 1, system_size, N]
+            rho_out = torch.matmul(F.transpose(-1, -2), matrices_reshaped)
+
+            # reshape rho_out into original dims of [time_steps + 1, system_size, unit_cell, unit_cell]
+            rho_out = rho_out.view(
+                self.t_params["time_steps"] + 1,
+                self.system_size[0],
+                self.unit_cell,
+                self.unit_cell,
+            )
+
+            return rho_out
+        else:
+            pass
+
+    def batching(self):
+        # apply time evolution over all batches
+        if len(self.k_size) == 1:
+            # evaluating rho and combining for each batch
+            rho_total = torch.zeros(
+                (
+                    self.t_params["time_steps"] + 1,
+                    self.system_size[0],
+                    self.unit_cell,
+                    self.unit_cell,
+                ),
+                dtype=DTYPE,
+                device=DEVICE,
+            )
+            for i in range(self.batch_total[0]):
+                batch_rho = self.timeEvolve(i)
+
+                # summing over k points
+                rho_total += batch_rho.sum(dim=2) / (
+                    self.batch_total[0] * self.k_pts_perbatch
+                )
+
+            # IFT of output state into position space
+            rho_total_IFT = self.stateIFT(rho_total)
+
+            # rho_total_IFT has dims [time_steps + 1, system_size, unit_cell, unit_cell]
+            return rho_total_IFT
