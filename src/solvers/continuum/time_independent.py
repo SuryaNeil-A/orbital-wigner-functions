@@ -658,12 +658,14 @@ class TimeIndepSolver:
             zero_band1 = sp.optimize.newton(
                 lambda x: (self.loss(0, x).item()) - 2 * np.cos(k[i]),
                 loss_guess_band1,
+                tol=1e-7
             )
             zeros_band1[i] = zero_band1
 
             zero_band2 = sp.optimize.newton(
                 lambda x: (self.loss(0, x).item()) - 2 * np.cos(k[i]),
                 loss_guess_band2,
+                tol=1e-7
             )
             zeros_band2[i] = zero_band2
 
