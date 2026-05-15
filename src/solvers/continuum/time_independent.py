@@ -638,11 +638,11 @@ class TimeIndepSolver:
 
     def find_tight_binding(
         self,
-        k: int | float | NDArray | Tensor,
-        E: int | float | NDArray | Tensor,
+        k: NDArray,
+        E: NDArray,
     ):
-        k = clean_input(k)
-        E = clean_input(E)
+        # k = clean_input(k)
+        # E = clean_input(E)
 
         zeros_band1 = np.zeros(k.shape)
         zeros_band2 = np.zeros(k.shape)
