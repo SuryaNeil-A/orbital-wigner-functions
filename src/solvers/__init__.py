@@ -7,5 +7,3 @@ DEVICE = (
     if torch.backends.mps.is_available()
     else "cpu"
 )
-# set default datatype of tensors
-DTYPE = torch.complex128

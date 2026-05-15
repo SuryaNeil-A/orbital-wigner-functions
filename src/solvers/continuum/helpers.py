@@ -2,7 +2,7 @@ import torch
 from torch import Tensor
 from numpy import float64, ndarray
 from numpy.typing import NDArray
-from . import DEVICE
+from solvers.__init__ import DEVICE
 
 # necessary for linear algebra
 # torch.backends.cuda.preferred_linalg_library("magma")
