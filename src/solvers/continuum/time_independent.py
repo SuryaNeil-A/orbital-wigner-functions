@@ -646,7 +646,7 @@ class TimeIndepSolver:
 
         zeros_band1 = np.zeros(k.shape)
         zeros_band2 = np.zeros(k.shape)
-        loss = self.loss(0, E)
+        loss = self.loss(0, E).cpu()
 
         assert E[sign_change(loss)].shape[0] >= 2, (
             "Must have at least two zero crossings in energy range."
