@@ -88,6 +88,14 @@ def asymmetric(ya: NDArray, yb: NDArray) -> NDArray:
     return np.array([ya[0] - yb[0], ya[1] - yb[1]])
 
 
+def cos(x, omega, A, C):
+    return A * np.cos(omega * x) + C
+
+
+def discriminant(k, delta, t_ab, t_ba):
+    return 4 * (delta**2 + t_ab**2 + t_ba**2 + 2 * t_ab * t_ba * np.cos(k))
+
+
 class TimeIndepSolver:
     """Class to solve for the eigenvalues and eigenfunctions of a 1-D period system.
 
@@ -627,6 +635,60 @@ class TimeIndepSolver:
 
     def eigenstate_asymmetric(self):
         pass
+
+    def find_tight_binding(
+        self,
+        k: int | float | NDArray | Tensor,
+        E: int | float | NDArray | Tensor,
+    ):
+        k = clean_input(k)
+        E = clean_input(E)
+
+        zeros_band1 = np.zeros(k.shape)
+        zeros_band2 = np.zeros(k.shape)
+        loss = self.loss(0, E)
+
+        assert E[sign_change(loss)].shape[0] >= 2, (
+            "Must have at least two zero crossings in energy range."
+        )
+        loss_guess_band1 = E[sign_change(loss)][0].real.item()
+        loss_guess_band2 = E[sign_change(loss)][1].real.item()
+
+        for i in range(len(k)):
+            zero_band1 = sp.optimize.newton(
+                lambda x: (self.loss(0, x).item()) - 2 * np.cos(k[i]),
+                loss_guess_band1,
+            )
+            zeros_band1[i] = zero_band1
+
+            zero_band2 = sp.optimize.newton(
+                lambda x: (self.loss(0, x).item()) - 2 * np.cos(k[i]),
+                loss_guess_band2,
+            )
+            zeros_band2[i] = zero_band2
+
+        avg = (zeros_band1 + zeros_band2) / 2
+        diff_squared = (zeros_band1 - zeros_band2) ** 2
+
+        avg_params, avg_cov = sp.optimize.curve_fit(
+            lambda k, A, C: cos(k, 1, A, C), k, avg
+        )
+        delta = np.abs(loss_guess_band1 - loss_guess_band2) / 2
+        diff_params, diff_cov = sp.optimize.curve_fit(
+            lambda k, t_ab, t_ba: discriminant(k, delta, t_ab, t_ba),
+            k,
+            diff_squared,
+        )
+
+        output = {
+            "t_bar": avg_params[0],
+            "e_bar": avg_params[1],
+            "delta": delta,
+            "t_ab": diff_params[0],
+            "t_ba": diff_params[1],
+        }
+
+        return output
 
     def plot_loss(
         self,
