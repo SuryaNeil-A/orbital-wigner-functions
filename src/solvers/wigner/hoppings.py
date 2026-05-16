@@ -2,6 +2,21 @@ import torch
 import numpy as np
 from solvers.__init__ import DEVICE
 from solvers.wigner.__init__ import DTYPE
+from solvers.continuum.helpers import clean_input
+
+
+def find_H_eff(k, e_bar, t_bar, delta, t_ab, t_ba):
+    k = clean_input(k)
+
+    H = torch.zeros(k.shape + (2, 2), device=DEVICE, dtype=DTYPE)
+
+    H[:, 0, 0] = e_bar + 2 * t_bar * torch.cos(k) + delta
+    H[:, 1, 1] = e_bar + 2 * t_bar * torch.cos(k) - delta
+    H[:, 1, 0] = t_ab + t_ba * torch.exp(-1j * k)
+    H[:, 0, 1] = t_ab + t_ba * torch.exp(1j * k)
+
+    return H
+
 
 class Hoppings:
     def __init__(self, params):
@@ -901,5 +916,40 @@ class Hoppings:
         # Column B_down carries e^{-ik}
         inter_hoppings[0, 3] += cR * g01
         inter_hoppings[1, 3] += cR * g11
+
+        return inter_hoppings, intra_hoppings
+
+    def H_eff(self, t):
+        # inter (between) cell hoppings
+        inter_hoppings = torch.zeros(
+            (2, 2) + t.shape, dtype=DTYPE, device=DEVICE
+        )
+        phi = (
+            self.params["x_0"]
+            * self.params["omega_0"]
+            * torch.sin(self.params["omega_0"] * t)
+            + 0 * t
+        )
+        t_ba = np.max([self.params["t_ba"], self.params["t_ab"]])
+        t_ab = np.min([self.params["t_ba"], self.params["t_ab"]])
+        m = t_ab / t_ba
+        t_bar = self.params["t_bar"] / t_ba
+        delta = self.params["delta"] / t_ba
+
+        # set these terms
+        inter_hoppings[0, 0] = t_bar * torch.exp(2j * phi)
+        inter_hoppings[0, 1] = 1 * torch.exp(1j * phi)
+        inter_hoppings[1, 1] = t_bar * torch.exp(-2j * phi)
+
+        # intra (within) cell hoppings
+        intra_hoppings = torch.zeros(
+            (2, 2) + t.shape, dtype=DTYPE, device=DEVICE
+        )
+
+        # set these terms
+        intra_hoppings[0, 0] = delta
+        intra_hoppings[0, 1] = 1*m * torch.exp(1j * phi)
+        intra_hoppings[1, 0] = 1*m * torch.exp(-1j * phi)
+        intra_hoppings[1, 1] = -delta
 
         return inter_hoppings, intra_hoppings

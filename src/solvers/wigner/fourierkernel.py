@@ -3,20 +3,6 @@ import numpy as np
 from solvers.__init__ import DEVICE
 from solvers.wigner.__init__ import DTYPE
 from solvers.wigner.hoppings import Hoppings
-from solvers.continuum.helpers import clean_input
-
-
-def find_H_eff(k, e_bar, t_bar, delta, t_ab, t_ba):
-    k = clean_input(k)
-
-    H = torch.zeros(k.shape + (2, 2), device=DEVICE, dtype=DTYPE)
-
-    H[:, 0, 0] = e_bar + 2 * t_bar * torch.cos(k) + delta
-    H[:, 1, 1] = e_bar + 2 * t_bar * torch.cos(k) - delta
-    H[:, 1, 0] = t_ab + t_ba * torch.exp(-1j * k)
-    H[:, 0, 1] = t_ab + t_ba * torch.exp(1j * k)
-
-    return H
 
 
 class BlochOperators:

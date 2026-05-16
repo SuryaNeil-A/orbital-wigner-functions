@@ -690,7 +690,7 @@ class TimeIndepSolver:
             "t_ba": diff_params[1],
         }
 
-        return output
+        return output, zeros_band1, zeros_band2
 
     def plot_loss(
         self,
